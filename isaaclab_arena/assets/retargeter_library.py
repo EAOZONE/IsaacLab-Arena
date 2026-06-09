@@ -167,7 +167,7 @@ def _build_alex_ability_hands_pipeline():
             use_wrist_position=True,
             target_offset_roll=0.0,
             target_offset_pitch=0.0,
-            target_offset_yaw=0.0,
+            target_offset_yaw=90.0,
         ),
         name="left_ee_pose",
     )
@@ -181,7 +181,7 @@ def _build_alex_ability_hands_pipeline():
             use_wrist_position=True,
             target_offset_roll=0.0,
             target_offset_pitch=0.0,
-            target_offset_yaw=180.0,
+            target_offset_yaw=90.0,
         ),
         name="right_ee_pose",
     )

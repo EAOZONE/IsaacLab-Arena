@@ -264,10 +264,39 @@ def _resolve_mesh_paths(src_path: str, output_path: str) -> str:
     return output_path
 
 
+def _strip_collisions_for_pink_ik(src_path: str, output_path: str) -> str:
+    """Write a collision-free URDF for Pinocchio / Pink IK.
+
+    Alex URDFs use Isaac Sim ``<capsule>`` collision primitives that standard
+    urdfdom cannot parse.  Pink IK only needs the kinematic tree, so collisions
+    are removed rather than converted.
+    """
+    marker = f"<!-- pink_ik_kinematics_only source={src_path} -->"
+
+    if (
+        os.path.exists(output_path)
+        and os.path.getmtime(output_path) >= os.path.getmtime(src_path)
+        and marker in open(output_path).read(512)
+    ):
+        return output_path
+
+    tree = ET.parse(src_path)
+    root = tree.getroot()
+    for link in root.iter("link"):
+        for collision in list(link.findall("collision")):
+            link.remove(collision)
+
+    tree.write(output_path, xml_declaration=True, encoding="unicode")
+    with open(output_path, "a") as f:
+        f.write(f"\n{marker}\n")
+    return output_path
+
+
 # Merged + resolved URDF paths (written once, cached by mtime).
 _ALEX_URDF_DIR = os.path.join(_ALEX_MODELS_DIR, "alex_V1_description", "urdf")
 _ALEX_MERGED_URDF_PATH = os.path.join(_ALEX_URDF_DIR, "alex_v1_nubs_arena.urdf")
 _ALEX_RESOLVED_URDF_PATH = os.path.join(_ALEX_URDF_DIR, "alex_v1_nubs_arena_resolved.urdf")
+_ALEX_PINK_IK_URDF_PATH = os.path.join(_ALEX_URDF_DIR, "alex_v1_nubs_arena_pink_ik.urdf")
 
 # ---------------------------------------------------------------------------
 # ArticulationCfg — copied verbatim from ALEX_V1_NUBS_DEFAULT_CFG in
@@ -489,8 +518,16 @@ ABILITY_HAND_JOINT_NAMES_LIST = [
 # 4-bar linkage q2 lower limit at q1=0 is 0.766 rad; use a small margin so defaults
 # pass PhysX limit checks (strict float comparison at the boundary fails).
 _ABILITY_HAND_Q2_OPEN_POS = 0.77
+# thumb_q1 ∈ [-1.74, 0]: 0 = closed, -1.74 = open; default to open.
+_ABILITY_HAND_THUMB_Q1_OPEN_POS = -1.74
 _ABILITY_HAND_DEFAULT_JOINT_POS = {
-    joint: (_ABILITY_HAND_Q2_OPEN_POS if joint.endswith("_q2") and "thumb" not in joint else 0.0)
+    joint: (
+        _ABILITY_HAND_Q2_OPEN_POS
+        if joint.endswith("_q2") and "thumb" not in joint
+        else _ABILITY_HAND_THUMB_Q1_OPEN_POS
+        if joint.endswith("thumb_q1")
+        else 0.0
+    )
     for joint in ABILITY_HAND_JOINT_NAMES_LIST
 }
 
@@ -619,6 +656,7 @@ def build_alex_ability_hand_teleop_action_order() -> list[str]:
 
 _ALEX_ABILITY_HANDS_MERGED_URDF_PATH = os.path.join(_ALEX_URDF_DIR, "alex_v1_ability_hands_arena.urdf")
 _ALEX_ABILITY_HANDS_RESOLVED_URDF_PATH = os.path.join(_ALEX_URDF_DIR, "alex_v1_ability_hands_arena_resolved.urdf")
+_ALEX_ABILITY_HANDS_PINK_IK_URDF_PATH = os.path.join(_ALEX_URDF_DIR, "alex_v1_ability_hands_arena_pink_ik.urdf")
 
 
 def _merge_ability_hands_urdf(robot_version: str, output_name: str = "alex_v1_ability_hands_arena") -> str:
@@ -819,9 +857,9 @@ class AlexPinkEmbodiment(EmbodimentBase):
         self.scene_config.robot = robot_cfg
 
         self.action_config = AlexActionsCfg()
-        # PINK IK: pass the merged URDF directly; pinocchio resolves package://
-        # prefixes via mesh_path without needing absolute paths.
-        self.action_config.upper_body_ik.controller.urdf_path = merged_urdf
+        # PINK IK: kinematics-only URDF (Alex capsule collisions break urdfdom).
+        pink_ik_urdf = _strip_collisions_for_pink_ik(merged_urdf, _ALEX_PINK_IK_URDF_PATH)
+        self.action_config.upper_body_ik.controller.urdf_path = pink_ik_urdf
         self.action_config.upper_body_ik.controller.mesh_path = _ALEX_MODELS_DIR
 
         self.observation_config = AlexObservationsCfg()
@@ -1089,16 +1127,16 @@ class AlexAbilityHandActionsCfg:
                     base_link_frame_name="PELVIS_LINK",
                     position_cost=8.0,
                     orientation_cost=1.0,
-                    lm_damping=75,
-                    gain=0.075,
+                    lm_damping=10,
+                    gain=0.5,
                 ),
                 LocalFrameTaskCfg(
                     frame="RIGHT_GRIPPER_Z_LINK",
                     base_link_frame_name="PELVIS_LINK",
                     position_cost=8.0,
                     orientation_cost=1.0,
-                    lm_damping=75,
-                    gain=0.075,
+                    lm_damping=10,
+                    gain=0.5,
                 ),
                 DampingTaskCfg(cost=0.5),
                 NullSpacePostureTaskCfg(cost=0.5),
@@ -1194,8 +1232,9 @@ class AlexAbilityHandEmbodiment(EmbodimentBase):
         self.scene_config.robot = robot_cfg
 
         self.action_config = AlexAbilityHandActionsCfg()
-        # Pass the resolved URDF so pinocchio gets absolute mesh paths — no mesh_path needed.
-        self.action_config.upper_body_ik.controller.urdf_path = resolved_urdf
+        # PINK IK: kinematics-only URDF (Alex capsule collisions break urdfdom).
+        pink_ik_urdf = _strip_collisions_for_pink_ik(resolved_urdf, _ALEX_ABILITY_HANDS_PINK_IK_URDF_PATH)
+        self.action_config.upper_body_ik.controller.urdf_path = pink_ik_urdf
         self.action_config.upper_body_ik.controller.mesh_path = None
 
         self.observation_config = AlexAbilityHandObservationsCfg()
