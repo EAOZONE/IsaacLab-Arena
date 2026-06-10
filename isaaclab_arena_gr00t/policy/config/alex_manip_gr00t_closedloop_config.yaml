@@ -1,0 +1,25 @@
+# Copyright (c) 2025-2026, The Isaac Lab Arena Project Developers (https://github.com/isaac-sim/IsaacLab-Arena/blob/main/CONTRIBUTORS.md).
+# All rights reserved.
+#
+# SPDX-License-Identifier: Apache-2.0
+
+# Gr00tRemoteClosedloopPolicy config for the Alex ability-hands open-microwave task.
+language_instruction: "Reach out to the microwave and open it."
+action_horizon: 16
+embodiment_tag: NEW_EMBODIMENT
+video_backend: decord
+modality_config_path: isaaclab_arena_gr00t/embodiments/alex/alex_data_config.py
+
+policy_joints_config_path: isaaclab_arena_gr00t/embodiments/alex/alex_gr00t_joint_space.yaml
+action_joints_config_path: isaaclab_arena_gr00t/embodiments/alex/alex_34dof_action_joint_space.yaml
+state_joints_config_path: isaaclab_arena_gr00t/embodiments/alex/alex_49dof_joint_space.yaml
+
+action_chunk_length: 4
+task_mode_name: alex_tabletop_manipulation
+
+pov_cam_name_sim:
+  - zed_left_cam_rgb
+  - zed_right_cam_rgb
+
+original_image_size: [480, 640, 3]
+target_image_size: [480, 640, 3]

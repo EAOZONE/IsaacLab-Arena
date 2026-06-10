@@ -20,7 +20,7 @@
 
 set -euo pipefail
 
-HF_DATASET_ID="${HF_DATASET_ID:-H2Ozone/alex_microwave}"
+HF_DATASET_ID="${HF_DATASET_ID:-H2Ozone/alex_generated}"
 HF_MODEL_REPO="${HF_MODEL_REPO:-H2Ozone/alex_open_microwave_gr00t}"
 SKIP_UPLOAD="${SKIP_UPLOAD:-0}"
 # Lives under /cache so the dataset download persists with the same volume/bind
@@ -33,7 +33,7 @@ BASE_MODEL_PATH="${BASE_MODEL_PATH:-nvidia/GR00T-N1.6-3B}"
 MAX_STEPS="${MAX_STEPS:-30000}"
 SAVE_STEPS="${SAVE_STEPS:-5000}"
 NUM_GPUS="${NUM_GPUS:-1}"
-DATALOADER_WORKERS="${DATALOADER_WORKERS:-2}"
+DATALOADER_WORKERS="${DATALOADER_WORKERS:-16}"
 LOW_VRAM="${LOW_VRAM:-0}"
 
 if [[ "${LOW_VRAM}" == "1" ]]; then
@@ -41,9 +41,9 @@ if [[ "${LOW_VRAM}" == "1" ]]; then
   GRAD_ACCUM_STEPS="${GRAD_ACCUM_STEPS:-2}"
   TUNE_FLAGS=(--no-tune-llm --no-tune-visual --no-tune-projector --tune-diffusion-model)
 else
-  GLOBAL_BATCH_SIZE="${GLOBAL_BATCH_SIZE:-8}"
+  GLOBAL_BATCH_SIZE="${GLOBAL_BATCH_SIZE:-32}"
   GRAD_ACCUM_STEPS="${GRAD_ACCUM_STEPS:-1}"
-  TUNE_FLAGS=(--no-tune-llm --tune-visual --tune-projector --tune-diffusion-model)
+  TUNE_FLAGS=(--tune-llm --tune-visual --tune-projector --tune-diffusion-model)
 fi
 
 cd /workspace/Isaac-GR00T
