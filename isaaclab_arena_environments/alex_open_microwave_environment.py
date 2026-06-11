@@ -68,7 +68,7 @@ class AlexOpenMicrowaveEnvironment(ExampleEnvironmentBase):
         ], "Invalid Alex embodiment {}".format(args_cli.embodiment)
         embodiment = self.asset_registry.get_asset_by_name(args_cli.embodiment)(enable_cameras=args_cli.enable_cameras)
         # Alex stands ~0.15 m further back than GR1T2 to account for the longer arm reach.
-        embodiment.set_initial_pose(Pose(position_xyz=(-0.55, 0.0, 0.0), rotation_xyzw=(0.0, 0.0, 0.0, 1.0)))
+        embodiment.set_initial_pose(Pose(position_xyz=(-0.40, -0.1, 0.0), rotation_xyzw=(0.0, 0.0, 0.0, 1.0)))
 
         if args_cli.teleop_device is not None:
             teleop_device = self.device_registry.get_device_by_name(args_cli.teleop_device)()
@@ -98,7 +98,7 @@ class AlexOpenMicrowaveEnvironment(ExampleEnvironmentBase):
             name=self.name,
             embodiment=embodiment,
             scene=scene,
-            task=OpenDoorTask(microwave, openness_threshold=0.8, reset_openness=0.2, episode_length_s=5.0),
+            task=OpenDoorTask(microwave, openness_threshold=0.8, reset_openness=0.2, episode_length_s=100 / 30),
             teleop_device=teleop_device,
         )
 

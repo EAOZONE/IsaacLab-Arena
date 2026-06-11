@@ -1392,8 +1392,6 @@ class AlexAbilityHandJointPositionEmbodiment(EmbodimentBase):
         robot_cfg.init_state.joint_pos = {
             "LEFT_ELBOW_Y": -1.5708,
             "RIGHT_ELBOW_Y": -1.5708,
-            "LEFT_GRIPPER_Z": -math.pi / 2,
-            "RIGHT_GRIPPER_Z": -math.pi / 2,
             **_ABILITY_HAND_DEFAULT_JOINT_POS,
         }
 

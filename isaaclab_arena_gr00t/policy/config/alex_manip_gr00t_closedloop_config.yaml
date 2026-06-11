@@ -14,7 +14,7 @@ policy_joints_config_path: isaaclab_arena_gr00t/embodiments/alex/alex_gr00t_join
 action_joints_config_path: isaaclab_arena_gr00t/embodiments/alex/alex_34dof_action_joint_space.yaml
 state_joints_config_path: isaaclab_arena_gr00t/embodiments/alex/alex_49dof_joint_space.yaml
 
-action_chunk_length: 4
+action_chunk_length: 16
 task_mode_name: alex_tabletop_manipulation
 
 pov_cam_name_sim:
