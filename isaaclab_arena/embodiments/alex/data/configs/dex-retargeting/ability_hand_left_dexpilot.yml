@@ -5,7 +5,17 @@ retargeting:
   - left_ability_hand_middle_anchor
   - left_ability_hand_ring_anchor
   - left_ability_hand_pinky_anchor
-  low_pass_alpha: 0.2
+  # DexPilot pinch projection: latch fingers to contact below project_dist,
+  # release above escape_dist. The library defaults (0.03 / 0.05) latch the
+  # hand closed and only release once the operator's fingertips spread past
+  # 5 cm, which markerless (Captury) finger tracking often never reports on an
+  # open hand -> the hand gets "stuck closed". Tightened so pinch engages only
+  # near true contact and releases as soon as the hand starts opening.
+  project_dist: 0.015
+  escape_dist: 0.025
+  # Snappier open/close. low_pass_alpha is the LPFilter step fraction
+  # (y += alpha*(x-y)); 0.2 corrects only 20%/step and feels sluggish/stuck.
+  low_pass_alpha: 0.5
   scaling_factor: 1.2
   target_joint_names:
   - left_ability_hand_index_q1

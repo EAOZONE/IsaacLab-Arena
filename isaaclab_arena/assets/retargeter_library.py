@@ -63,18 +63,22 @@ class AlexPinkIsaacTeleopRetargeter(RetargetterBase):
         return _build_alex_pipeline
 
 
-def _build_alex_pipeline():
+def _build_alex_pipeline(hands_source=None):
     """Build an IsaacTeleop retargeting pipeline for Alex arm teleoperation.
 
     Creates two Se3AbsRetargeters for left and right elbow-tip pose tracking.
     Output is a 14-D tensor: [left_pose(7), right_pose(7)].
+
+    Args:
+        hands_source: Optional hands source node (e.g. a Captury source).
+            Defaults to the OpenXR DeviceIO ``HandsSource``.
     """
     from isaacteleop.retargeters import Se3AbsRetargeter, Se3RetargeterConfig, TensorReorderer
     from isaacteleop.retargeting_engine.deviceio_source_nodes import HandsSource
     from isaacteleop.retargeting_engine.interface import OutputCombiner, ValueInput
     from isaacteleop.retargeting_engine.tensor_types import TransformMatrix
 
-    hands = HandsSource(name="hands")
+    hands = hands_source if hands_source is not None else HandsSource(name="hands")
     transform_input = ValueInput("world_T_anchor", TransformMatrix())
     transformed_hands = hands.transformed(transform_input.output(ValueInput.VALUE))
 
@@ -129,10 +133,15 @@ def _build_alex_pipeline():
     return OutputCombiner({"action": connected_reorderer.output("output")})
 
 
-def _build_alex_ability_hands_pipeline(robot_version: str = "V1"):
+def _build_alex_ability_hands_pipeline(robot_version: str = "V1", hands_source=None):
     """Build IsaacTeleop pipeline for Alex with PINK IK wrists and dex hand retargeting.
 
     Output tensor layout: [left_wrist(7), right_wrist(7), hand_joints(20)].
+
+    Args:
+        robot_version: Alex robot version ("V1" or "V2").
+        hands_source: Optional hands source node (e.g. a Captury source).
+            Defaults to the OpenXR DeviceIO ``HandsSource``.
     """
     from isaacteleop.retargeters import (
         DexHandRetargeter,
@@ -149,13 +158,13 @@ def _build_alex_ability_hands_pipeline(robot_version: str = "V1"):
     from isaaclab_arena.embodiments.alex.alex import (
         ALEX_ABILITY_HAND_LEFT_EE_ACTION_KEYS,
         ALEX_ABILITY_HAND_RIGHT_EE_ACTION_KEYS,
+        _resolve_standalone_hand_urdf,
         ability_hand_full_joint_names,
         ability_hand_independent_joint_names,
         build_alex_ability_hand_teleop_action_order,
-        _resolve_standalone_hand_urdf,
     )
 
-    hands = HandsSource(name="hands")
+    hands = hands_source if hands_source is not None else HandsSource(name="hands")
     transform_input = ValueInput("world_T_anchor", TransformMatrix())
     transformed_hands = hands.transformed(transform_input.output(ValueInput.VALUE))
 
@@ -300,6 +309,73 @@ class AlexV2AbilityHandIsaacTeleopRetargeter(AlexAbilityHandIsaacTeleopRetargete
         from isaaclab_arena.embodiments.alex.alex import ALEX_V2
 
         return lambda: _build_alex_ability_hands_pipeline(ALEX_V2)[1]
+
+
+@register_retargeter
+class AlexPinkCapturyRetargeter(RetargetterBase):
+    """Captury mocap pipeline builder for Alex with PINK IK arm control (no fingers).
+
+    The returned builder takes the Captury hands source node as its single
+    argument (see :class:`~isaaclab_arena.teleop.captury.captury_teleop_device.CapturyDeviceCfg`).
+    """
+
+    device = "captury"
+    embodiment = "alex_pink"
+
+    def __init__(self):
+        pass
+
+    def get_pipeline_builder(self, embodiment: object) -> Callable:
+        if hasattr(embodiment, "enable_captury_teleop_responsiveness"):
+            embodiment.enable_captury_teleop_responsiveness()
+        return lambda hands_source: _build_alex_pipeline(hands_source=hands_source)
+
+
+@register_retargeter
+class AlexAbilityHandCapturyRetargeter(RetargetterBase):
+    """Captury mocap pipeline builder for Alex with Psyonic Ability Hands.
+
+    Finger retargeting requires a Captury skeleton with finger tracking;
+    configure the streamed joint names via ``CapturyDeviceCfg.captury_joint_names``.
+    """
+
+    device = "captury"
+    embodiment = "alex_ability_hands"
+
+    def __init__(self):
+        pass
+
+    def get_pipeline_builder(self, embodiment: object) -> Callable:
+        # Captury streams the upper-arm chain, so enable elbow tracking for a
+        # more realistic arm pose (teleop-only; does not change the action).
+        if hasattr(embodiment, "enable_teleop_elbow_tracking"):
+            embodiment.enable_teleop_elbow_tracking()
+        if hasattr(embodiment, "enable_captury_teleop_responsiveness"):
+            embodiment.enable_captury_teleop_responsiveness()
+        return lambda hands_source: _build_alex_ability_hands_pipeline(hands_source=hands_source)[0]
+
+
+@register_retargeter
+class AlexV2PinkCapturyRetargeter(AlexPinkCapturyRetargeter):
+    """Captury mocap pipeline builder for Alex V2 with PINK IK arm control (no fingers)."""
+
+    embodiment = "alex_v2_pink"
+
+
+@register_retargeter
+class AlexV2AbilityHandCapturyRetargeter(AlexAbilityHandCapturyRetargeter):
+    """Captury mocap pipeline builder for Alex V2 with Psyonic Ability Hands."""
+
+    embodiment = "alex_v2_ability_hands"
+
+    def get_pipeline_builder(self, embodiment: object) -> Callable:
+        from isaaclab_arena.embodiments.alex.alex import ALEX_V2
+
+        if hasattr(embodiment, "enable_teleop_elbow_tracking"):
+            embodiment.enable_teleop_elbow_tracking()
+        if hasattr(embodiment, "enable_captury_teleop_responsiveness"):
+            embodiment.enable_captury_teleop_responsiveness()
+        return lambda hands_source: _build_alex_ability_hands_pipeline(ALEX_V2, hands_source=hands_source)[0]
 
 
 @register_retargeter

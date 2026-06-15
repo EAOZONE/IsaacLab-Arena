@@ -16,6 +16,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import os
 from abc import ABC, abstractmethod
 from collections.abc import Callable
 
@@ -61,6 +62,63 @@ class OpenXRCfg(TeleopDeviceBase):
             xr_cfg=xr_cfg,
             target_frame_prim_path=target_frame_prim_path,
             retargeters_to_tune=retargeters_to_tune,
+        )
+
+
+@register_device
+class CapturyCfg(TeleopDeviceBase):
+    """Captury Live markerless mocap teleop device.
+
+    The Captury Live server address can be set via the ``CAPTURY_HOST`` and
+    ``CAPTURY_PORT`` environment variables (the device is constructed without
+    arguments by the environment CLI plumbing). Set ``CAPTURY_VISUALIZE_SKELETON=0``
+    to hide the tracked-skeleton debug overlay and show only the robot.
+    """
+
+    name = "captury"
+
+    def __init__(
+        self,
+        sim_device: str | None = None,
+        host: str | None = None,
+        port: int | None = None,
+        actor_id: int | None = None,
+        joint_names: list[str] | None = None,
+        visualize_skeleton: bool | None = None,
+    ):
+        super().__init__(sim_device=sim_device)
+        self.host = host if host is not None else os.environ.get("CAPTURY_HOST", "127.0.0.1")
+        self.port = port if port is not None else int(os.environ.get("CAPTURY_PORT", "2101"))
+        self.actor_id = actor_id
+        self.joint_names = joint_names
+        self.visualize_skeleton = (
+            visualize_skeleton
+            if visualize_skeleton is not None
+            else os.environ.get("CAPTURY_VISUALIZE_SKELETON", "1").lower() not in ("0", "false", "no")
+        )
+
+    def get_device_cfg(
+        self,
+        pipeline_builder: Callable | None = None,
+        embodiment: object | None = None,
+        retargeters_to_tune: Callable | None = None,
+    ):
+        from isaaclab_arena.teleop.captury.captury_teleop_device import CapturyDeviceCfg
+
+        if pipeline_builder is None:
+            raise ValueError("CapturyCfg requires a pipeline_builder (got None)")
+        xr_cfg = embodiment.get_xr_cfg() if embodiment is not None else XrCfg()
+        target_frame_prim_path = embodiment.get_teleop_target_frame_prim_path()
+        return CapturyDeviceCfg(
+            pipeline_builder=pipeline_builder,
+            sim_device=self.sim_device,
+            xr_cfg=xr_cfg,
+            target_frame_prim_path=target_frame_prim_path,
+            captury_host=self.host,
+            captury_port=self.port,
+            captury_actor_id=self.actor_id,
+            captury_joint_names=self.joint_names,
+            captury_visualize_skeleton=self.visualize_skeleton,
         )
 
 

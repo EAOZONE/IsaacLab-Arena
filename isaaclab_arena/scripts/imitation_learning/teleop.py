@@ -55,6 +55,75 @@ from isaaclab_tasks.manager_based.manipulation.lift import mdp
 from isaaclab_teleop import IsaacTeleopCfg, create_isaac_teleop_device, remove_camera_configs
 
 
+def _apply_teleop_elbow_targets(embodiment, teleop_interface, env) -> None:
+    """Feed operator arm hints into the IK solve, if both sides support it.
+
+    No-op unless the device exposes arm tracking hints (Captury) and the
+    embodiment supports ``apply_teleop_elbow_targets`` (Alex ability hands
+    with elbow tracking enabled).
+    """
+    if embodiment is None or not hasattr(embodiment, "apply_teleop_elbow_targets"):
+        return
+    if hasattr(teleop_interface, "get_arm_tracking_hints_world"):
+        embodiment.apply_teleop_elbow_targets(env, teleop_interface.get_arm_tracking_hints_world())
+    elif hasattr(teleop_interface, "get_elbow_directions_world"):
+        embodiment.apply_teleop_elbow_targets(env, teleop_interface.get_elbow_directions_world())
+
+
+def _create_teleop_interface(env_cfg, env, teleoperation_callbacks: dict[str, Callable]) -> object | None:
+    """Create the teleop device for the environment configuration.
+
+    Resolution order: Captury > IsaacTeleop (XR) > env_cfg.teleop_devices >
+    hardcoded fallback devices.
+
+    Returns:
+        The teleop device, or ``None`` if the requested device is unsupported.
+    """
+    from isaaclab_arena.teleop.captury.captury_teleop_device import CapturyDeviceCfg, create_captury_teleop_device
+
+    if hasattr(env_cfg, "isaac_teleop") and isinstance(env_cfg.isaac_teleop, CapturyDeviceCfg):
+        return create_captury_teleop_device(
+            env_cfg.isaac_teleop,
+            sim_device=str(env.device),
+            callbacks=teleoperation_callbacks,
+        )
+    if hasattr(env_cfg, "isaac_teleop") and isinstance(env_cfg.isaac_teleop, IsaacTeleopCfg):
+        return create_isaac_teleop_device(
+            env_cfg.isaac_teleop,
+            sim_device=str(env.device),
+            callbacks=teleoperation_callbacks,
+        )
+    if hasattr(env_cfg, "teleop_devices") and args_cli.teleop_device in env_cfg.teleop_devices.devices:
+        return create_teleop_device(args_cli.teleop_device, env_cfg.teleop_devices.devices, teleoperation_callbacks)
+
+    omni.log.warn(f"No teleop device '{args_cli.teleop_device}' found in environment config. Creating default.")
+    sensitivity = args_cli.sensitivity
+    if args_cli.teleop_device.lower() == "keyboard":
+        teleop_interface = Se3Keyboard(
+            Se3KeyboardCfg(pos_sensitivity=0.05 * sensitivity, rot_sensitivity=0.05 * sensitivity)
+        )
+    elif args_cli.teleop_device.lower() == "spacemouse":
+        teleop_interface = Se3SpaceMouse(
+            Se3SpaceMouseCfg(pos_sensitivity=0.05 * sensitivity, rot_sensitivity=0.05 * sensitivity)
+        )
+    elif args_cli.teleop_device.lower() == "gamepad":
+        teleop_interface = Se3Gamepad(
+            Se3GamepadCfg(pos_sensitivity=0.1 * sensitivity, rot_sensitivity=0.1 * sensitivity)
+        )
+    else:
+        omni.log.error(f"Unsupported teleop device: {args_cli.teleop_device}")
+        omni.log.error("Supported devices: keyboard, spacemouse, gamepad, avp_handtracking")
+        return None
+
+    # Add callbacks to fallback device
+    for key, callback in teleoperation_callbacks.items():
+        try:
+            teleop_interface.add_callback(key, callback)
+        except (ValueError, TypeError) as e:
+            omni.log.warn(f"Failed to add callback for key {key}: {e}")
+    return teleop_interface
+
+
 def main() -> None:
     """
     Run keyboard teleoperation with Isaac Lab manipulation environment.
@@ -163,47 +232,10 @@ def main() -> None:
         # Always active for other devices
         teleoperation_active = True
 
-    # Create teleop device: IsaacTeleop (XR) > env_cfg.teleop_devices > hardcoded fallback
+    # Create teleop device: Captury > IsaacTeleop (XR) > env_cfg.teleop_devices > hardcoded fallback
     teleop_interface = None
     try:
-        if hasattr(env_cfg, "isaac_teleop") and isinstance(env_cfg.isaac_teleop, IsaacTeleopCfg):
-            teleop_interface = create_isaac_teleop_device(
-                env_cfg.isaac_teleop,
-                sim_device=str(env.device),
-                callbacks=teleoperation_callbacks,
-            )
-        elif hasattr(env_cfg, "teleop_devices") and args_cli.teleop_device in env_cfg.teleop_devices.devices:
-            teleop_interface = create_teleop_device(
-                args_cli.teleop_device, env_cfg.teleop_devices.devices, teleoperation_callbacks
-            )
-        else:
-            omni.log.warn(f"No teleop device '{args_cli.teleop_device}' found in environment config. Creating default.")
-            sensitivity = args_cli.sensitivity
-            if args_cli.teleop_device.lower() == "keyboard":
-                teleop_interface = Se3Keyboard(
-                    Se3KeyboardCfg(pos_sensitivity=0.05 * sensitivity, rot_sensitivity=0.05 * sensitivity)
-                )
-            elif args_cli.teleop_device.lower() == "spacemouse":
-                teleop_interface = Se3SpaceMouse(
-                    Se3SpaceMouseCfg(pos_sensitivity=0.05 * sensitivity, rot_sensitivity=0.05 * sensitivity)
-                )
-            elif args_cli.teleop_device.lower() == "gamepad":
-                teleop_interface = Se3Gamepad(
-                    Se3GamepadCfg(pos_sensitivity=0.1 * sensitivity, rot_sensitivity=0.1 * sensitivity)
-                )
-            else:
-                omni.log.error(f"Unsupported teleop device: {args_cli.teleop_device}")
-                omni.log.error("Supported devices: keyboard, spacemouse, gamepad, avp_handtracking")
-                env.close()
-                simulation_app.close()
-                return
-
-            # Add callbacks to fallback device
-            for key, callback in teleoperation_callbacks.items():
-                try:
-                    teleop_interface.add_callback(key, callback)
-                except (ValueError, TypeError) as e:
-                    omni.log.warn(f"Failed to add callback for key {key}: {e}")
+        teleop_interface = _create_teleop_interface(env_cfg, env, teleoperation_callbacks)
     except Exception as e:
         omni.log.error(f"Failed to create teleop device: {e}")
         env.close()
@@ -240,6 +272,7 @@ def main() -> None:
                     elif teleoperation_active:
                         if embodiment is not None and hasattr(embodiment, "stabilize_teleop_action"):
                             action = embodiment.stabilize_teleop_action(env, action)
+                        _apply_teleop_elbow_targets(embodiment, teleop_interface, env)
                         actions = action.repeat(env.num_envs, 1)
                         env.step(actions)
                     else:

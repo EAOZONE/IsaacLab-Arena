@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import copy
 import math
+import numpy as np
 import os
 import re
 import torch
@@ -666,6 +667,23 @@ ABILITY_HAND_TELEOP_JOINT_ORDER = [
     "right_ability_hand_thumb_q2",
 ]
 
+# Ability-hand joint limits [lower, upper] (rad) from the standalone hand URDFs
+# (identical left/right). For every joint the UPPER limit is the fully-closed
+# pose and the LOWER limit is fully-open, so capping each joint at a single
+# "fraction toward upper" limits how far the whole hand may close.
+_ABILITY_HAND_JOINT_LIMITS_BY_SUFFIX = {
+    "index_q1": (0.0, 1.74),
+    "middle_q1": (0.0, 1.74),
+    "ring_q1": (0.0, 1.74),
+    "pinky_q1": (0.0, 1.74),
+    "thumb_q1": (-1.74, 0.0),
+    "index_q2": (0.766, 2.61),
+    "middle_q2": (0.766, 2.61),
+    "ring_q2": (0.766, 2.61),
+    "pinky_q2": (0.766, 2.61),
+    "thumb_q2": (0.0, 1.74),
+}
+
 ALEX_ABILITY_HAND_WRIST_ACTION_DIM = len(ALEX_ABILITY_HAND_LEFT_EE_ACTION_KEYS) + len(
     ALEX_ABILITY_HAND_RIGHT_EE_ACTION_KEYS
 )
@@ -929,6 +947,126 @@ _ZED_X_MINI_PINHOLE_SPAWN = sim_utils.PinholeCameraCfg.from_intrinsic_matrix(
 _ALEX_XR_ANCHOR_TORSO_PRIM_PATH = "/World/envs/env_0/Robot/Geometry/TORSO_LINK"
 
 
+# Teleop-only elbow tracking (see CapturyTeleopDevice). The elbow IK targets the
+# elbow-joint link; the shoulder link supplies the upper-arm length used to place
+# it. PELVIS is the IK base frame.
+ALEX_ELBOW_LINK_NAMES = {"left": "LEFT_ELBOW_Y_LINK", "right": "RIGHT_ELBOW_Y_LINK"}
+ALEX_SHOULDER_LINK_NAMES = {"left": "LEFT_SHOULDER_Z_LINK", "right": "RIGHT_SHOULDER_Z_LINK"}
+ALEX_PELVIS_LINK_NAME = "PELVIS_LINK"
+# Cost of the elbow position task relative to the wrist task (position_cost 8).
+# Low enough that wrist tracking stays primary; high enough to resolve the
+# 7-DOF arm's elbow swivel toward the operator's pose.
+ALEX_ELBOW_POSITION_COST = 3.0
+# Position-only elbow tracking. The elbow POSITION (placed along the operator's
+# shoulder->elbow direction) together with the wrist task fully determines elbow
+# flexion, so a forearm-bone orientation target is redundant. Worse, the Captury
+# forearm bone frame and the robot ELBOW_Y_LINK frame have unrelated axis
+# conventions (no calibration between them), so a non-zero orientation cost locks
+# the elbow at an arbitrary angle and fights the wrist. Keep this 0.0 unless a
+# proper bone->link calibration offset is introduced.
+ALEX_ELBOW_ORIENTATION_COST = 0.0
+# Pink IK wrist-task gain for Captury teleop (OpenXR uses 0.5; mocap benefits from
+# a snappier response because targets are already filtered by the stream).
+ALEX_CAPTURY_TELEOP_IK_GAIN = 1.0
+# Levenberg-Marquardt damping for the Captury wrist tasks. The default (10) heavily
+# regularizes the IK velocity and makes the arm trail the operator ("laggy"); mocap
+# targets are well-conditioned, so a lower value lets the wrist converge faster.
+ALEX_CAPTURY_TELEOP_LM_DAMPING = 1.0
+# Cap how far the ability hand may close during teleop, as a fraction of each
+# finger joint's open->closed (lower->upper limit) range. 1.0 allows a full fist;
+# 0.75 stops the fingers at three-quarters closed so the hand never curls fully
+# shut (works around noisy mocap finger tracking driving the grip closed).
+ALEX_ABILITY_HAND_MAX_CLOSE_FRACTION = 0.75
+
+
+def apply_alex_elbow_ik_targets(
+    env: ManagerBasedEnv,
+    arm_hints_world: dict[str, object | None],
+    *,
+    ik_term_name: str = "upper_body_ik",
+    position_cost: float = ALEX_ELBOW_POSITION_COST,
+    orientation_cost: float = ALEX_ELBOW_ORIENTATION_COST,
+) -> None:
+    """Set live elbow IK targets from operator upper-arm and forearm tracking.
+
+    Teleop-only: drives the elbow ``fixed_input_tasks`` added by
+    :meth:`AlexAbilityHandEmbodiment.enable_teleop_elbow_tracking`.  Position
+    uses the operator shoulder->elbow direction at the robot's upper-arm length;
+    together with the wrist task this fully determines elbow flexion and swivel.
+    An orientation target is also computed from the Captury forearm bone, but it
+    is weighted ``ALEX_ELBOW_ORIENTATION_COST`` (0.0 by default — see that
+    constant) because the bone and link frames are not calibrated to each other.
+
+    Args:
+        env: The teleop environment (single-env).
+        arm_hints_world: ``{"left": hints | None, "right": hints | None}`` with
+            :class:`~isaaclab_arena.teleop.captury.captury_skeleton.CapturyArmTrackingHints`
+            per tracked arm.
+        ik_term_name: Name of the PINK IK action term.
+        position_cost: Position cost applied to the elbow tasks while driven.
+        orientation_cost: Orientation cost for forearm-bone flexion tracking.
+    """
+    import pinocchio as pin
+
+    from isaaclab_arena.teleop.captury.captury_skeleton import (
+        CapturyArmTrackingHints,
+        elbow_target_in_base_frame,
+    )
+
+    try:
+        ik_term = env.action_manager.get_term(ik_term_name)
+        ik_controllers = ik_term._ik_controllers
+    except (KeyError, AttributeError):
+        return
+
+    robot = env.scene["robot"]
+    try:
+        pelvis_idx = int(robot.find_bodies([ALEX_PELVIS_LINK_NAME])[0][0])
+        shoulder_idx = {side: int(robot.find_bodies([name])[0][0]) for side, name in ALEX_SHOULDER_LINK_NAMES.items()}
+        elbow_idx = {side: int(robot.find_bodies([name])[0][0]) for side, name in ALEX_ELBOW_LINK_NAMES.items()}
+    except Exception:
+        return
+
+    body_pos_w = wp.to_torch(robot.data.body_pos_w)[0]
+    body_quat_w = wp.to_torch(robot.data.body_quat_w)[0]
+    pelvis_pos = body_pos_w[pelvis_idx].cpu().numpy().astype(np.float64)
+    pelvis_rot = PoseUtils.matrix_from_quat(body_quat_w[pelvis_idx]).cpu().numpy().astype(np.float64)
+    pelvis_rot_inv = pelvis_rot.T
+
+    targets_in_base: dict[str, np.ndarray] = {}
+    rotations_in_base: dict[str, np.ndarray] = {}
+    for side in ("left", "right"):
+        shoulder_pos = body_pos_w[shoulder_idx[side]].cpu().numpy().astype(np.float64)
+        elbow_pos = body_pos_w[elbow_idx[side]].cpu().numpy().astype(np.float64)
+        hints = arm_hints_world.get(side)
+        if hints is None or not isinstance(hints, CapturyArmTrackingHints):
+            targets_in_base[side] = pelvis_rot_inv @ (elbow_pos - pelvis_pos)
+            rotations_in_base[side] = pelvis_rot_inv @ PoseUtils.matrix_from_quat(
+                body_quat_w[elbow_idx[side]]
+            ).cpu().numpy().astype(np.float64)
+            continue
+        targets_in_base[side] = elbow_target_in_base_frame(
+            shoulder_pos,
+            elbow_pos,
+            pelvis_pos,
+            pelvis_rot,
+            hints.upper_direction,
+        )
+        rotations_in_base[side] = pelvis_rot_inv @ hints.elbow_orientation
+
+    for ik_controller in ik_controllers:
+        for task in ik_controller.cfg.fixed_input_tasks:
+            frame = getattr(task, "frame", None)
+            side = next((s for s, name in ALEX_ELBOW_LINK_NAMES.items() if name == frame), None)
+            if side is None:
+                continue
+            task.set_target(pin.SE3(rotations_in_base[side], targets_in_base[side]))
+            if hasattr(task, "set_position_cost"):
+                task.set_position_cost(position_cost)
+            if hasattr(task, "set_orientation_cost"):
+                task.set_orientation_cost(orientation_cost)
+
+
 def stabilize_alex_ability_hand_teleop_action(
     env: ManagerBasedEnv,
     action: torch.Tensor,
@@ -981,6 +1119,48 @@ def stabilize_alex_ability_hand_teleop_action(
 
     _stabilize_wrist(0, left_pos, left_quat)
     _stabilize_wrist(7, right_pos, right_quat)
+    return action
+
+
+# Cache of (20,) per-joint close-cap tensors keyed by fraction (CPU; moved to the
+# action's device on use).
+_ABILITY_HAND_CLOSE_CAP_CACHE: dict[float, torch.Tensor] = {}
+
+
+def _ability_hand_close_caps(fraction: float) -> torch.Tensor:
+    """Per-joint upper bound (rad) for ``ABILITY_HAND_TELEOP_JOINT_ORDER``.
+
+    For each joint the cap is ``lower + fraction * (upper - lower)`` — i.e. the
+    pose that is ``fraction`` of the way from fully open to fully closed.
+    """
+    cap = _ABILITY_HAND_CLOSE_CAP_CACHE.get(fraction)
+    if cap is None:
+        lowers, uppers = [], []
+        for name in ABILITY_HAND_TELEOP_JOINT_ORDER:
+            lower, upper = _ABILITY_HAND_JOINT_LIMITS_BY_SUFFIX[name.split("_ability_hand_")[1]]
+            lowers.append(lower)
+            uppers.append(upper)
+        lowers_t = torch.tensor(lowers, dtype=torch.float32)
+        uppers_t = torch.tensor(uppers, dtype=torch.float32)
+        cap = lowers_t + fraction * (uppers_t - lowers_t)
+        _ABILITY_HAND_CLOSE_CAP_CACHE[fraction] = cap
+    return cap
+
+
+def clamp_ability_hand_close_fraction(action: torch.Tensor, fraction: float) -> torch.Tensor:
+    """Cap the hand-joint block so the ability hand cannot close past ``fraction``.
+
+    The closing direction is the joint's upper limit for every ability-hand
+    joint, so capping each joint at ``lower + fraction*(upper-lower)`` prevents a
+    full fist while leaving opening unrestricted. Wrist pose entries are untouched.
+    """
+    if fraction >= 1.0 or action.numel() < ALEX_ABILITY_HAND_TOTAL_ACTION_DIM:
+        return action
+    start = ALEX_ABILITY_HAND_WRIST_ACTION_DIM
+    end = start + ALEX_ABILITY_HAND_HAND_ACTION_DIM
+    caps = _ability_hand_close_caps(fraction).to(device=action.device, dtype=action.dtype)
+    action = action.clone()
+    action[start:end] = torch.minimum(action[start:end], caps)
     return action
 
 
@@ -1465,10 +1645,117 @@ class AlexAbilityHandEmbodiment(AlexTeleopEmbodimentMixin, EmbodimentBase):
     def stabilize_teleop_action(self, env: ManagerBasedEnv, action: torch.Tensor) -> torch.Tensor:
         """Clamp ability-hand wrist teleop targets before Pink IK."""
         force_hold_wrists = self._teleop_warmup_steps_remaining > 0
-        action = stabilize_alex_ability_hand_teleop_action(env, action, force_hold_wrists=force_hold_wrists)
+        # The steady-state distance gate exists to catch a startup jump from
+        # mis-anchored / simulated tracking. With live Captury the targets are
+        # real, so the gate would freeze a wrist whenever the robot trails the
+        # operator past the threshold (read as lag). Disable it once warmup is
+        # done for Captury; the warmup hold still guards the first steps.
+        if self._teleop_relax_wrist_clamp:
+            action = stabilize_alex_ability_hand_teleop_action(
+                env,
+                action,
+                max_wrist_pos_error=float("inf"),
+                max_wrist_rot_error_rad=float("inf"),
+                force_hold_wrists=force_hold_wrists,
+            )
+        else:
+            action = stabilize_alex_ability_hand_teleop_action(env, action, force_hold_wrists=force_hold_wrists)
+        if self._teleop_max_close_fraction < 1.0:
+            action = clamp_ability_hand_close_fraction(action, self._teleop_max_close_fraction)
         if self._teleop_warmup_steps_remaining > 0:
             self._teleop_warmup_steps_remaining -= 1
         return action
+
+    _elbow_tracking_enabled: bool = False
+    _teleop_relax_wrist_clamp: bool = False
+    _teleop_max_close_fraction: float = 1.0
+
+    def set_teleop_max_close_fraction(self, fraction: float = ALEX_ABILITY_HAND_MAX_CLOSE_FRACTION) -> None:
+        """Limit how far the ability hand may close during teleop (1.0 = full fist)."""
+        assert 0.0 < fraction <= 1.0, f"close fraction must be in (0, 1], got {fraction}"
+        self._teleop_max_close_fraction = fraction
+
+    def enable_captury_teleop_responsiveness(
+        self,
+        ik_gain: float = ALEX_CAPTURY_TELEOP_IK_GAIN,
+        lm_damping: float = ALEX_CAPTURY_TELEOP_LM_DAMPING,
+    ) -> None:
+        """Make Pink IK track Captury snappily and disable the steady-state clamp.
+
+        Captury streams absolute skeleton poses; once torso-anchored the targets
+        are well-conditioned, so the wrist tasks can use a higher gain and lower
+        Levenberg-Marquardt damping than OpenXR hand tracking (which trails the
+        operator at the conservative defaults) without inducing blow-ups.
+
+        Also disables the steady-state wrist distance gate in
+        :meth:`stabilize_teleop_action` (it would otherwise freeze a wrist that
+        trails the operator, compounding the lag) and relaxes the null-space
+        posture task, whose default target is the robot init pose (elbows at
+        -90 deg) and would otherwise pull the elbows back toward that angle.
+        """
+        for task in self.action_config.upper_body_ik.controller.variable_input_tasks:
+            if isinstance(task, LocalFrameTaskCfg):
+                task.gain = ik_gain
+                task.lm_damping = lm_damping
+            elif isinstance(task, NullSpacePostureTaskCfg):
+                task.cost = 0.0
+        self._teleop_relax_wrist_clamp = True
+        # Stop noisy mocap finger tracking from curling the hand fully shut.
+        self.set_teleop_max_close_fraction()
+
+    def enable_teleop_elbow_tracking(
+        self,
+        position_cost: float = ALEX_ELBOW_POSITION_COST,
+        orientation_cost: float = ALEX_ELBOW_ORIENTATION_COST,
+    ) -> None:
+        """Add elbow IK tasks so the arm follows the operator's elbow bend and swivel.
+
+        Appends a ``LocalFrameTaskCfg`` per arm (targeting the elbow link) to the
+        IK controller's ``fixed_input_tasks``.  The elbow position resolves both
+        arm swivel and flexion (orientation is off by default — see
+        ``ALEX_ELBOW_ORIENTATION_COST``).  These do not consume the action
+        vector, so the action space and recorded demos stay unchanged; they are
+        driven live by :meth:`apply_teleop_elbow_targets`.
+
+        Call this at build time (before the environment is constructed) for
+        teleop sessions that can supply arm hints — it is a no-op for policy
+        evaluation and mimic, which never add these tasks.
+
+        Args:
+            position_cost: Position cost of the elbow tasks (relative to the
+                wrist task's cost of 8).
+            orientation_cost: Orientation cost for forearm-bone flexion tracking.
+        """
+        if self._elbow_tracking_enabled:
+            return
+        fixed_tasks = self.action_config.upper_body_ik.controller.fixed_input_tasks
+        for side in ("left", "right"):
+            fixed_tasks.append(
+                LocalFrameTaskCfg(
+                    frame=ALEX_ELBOW_LINK_NAMES[side],
+                    base_link_frame_name=ALEX_PELVIS_LINK_NAME,
+                    position_cost=position_cost,
+                    orientation_cost=orientation_cost,
+                    lm_damping=10,
+                    gain=1.0,
+                )
+            )
+        self._elbow_tracking_enabled = True
+
+    def apply_teleop_elbow_targets(self, env: ManagerBasedEnv, arm_hints_world: dict[str, object | None]) -> None:
+        """Drive the elbow IK targets each step from operator arm tracking hints.
+
+        No-op unless :meth:`enable_teleop_elbow_tracking` was called.
+
+        Args:
+            env: The teleop environment.
+            arm_hints_world: Per-arm
+                :class:`~isaaclab_arena.teleop.captury.captury_skeleton.CapturyArmTrackingHints`
+                in the world frame (``None`` for an untracked arm).
+        """
+        if not self._elbow_tracking_enabled:
+            return
+        apply_alex_elbow_ik_targets(env, arm_hints_world)
 
 
 @register_asset

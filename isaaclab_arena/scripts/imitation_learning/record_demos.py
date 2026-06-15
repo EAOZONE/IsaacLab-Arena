@@ -263,6 +263,20 @@ def create_environment(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg, env_name:
         exit(1)
 
 
+def _apply_teleop_elbow_targets(embodiment, teleop_interface, env) -> None:
+    """Feed operator elbow directions into the IK solve, if both sides support it.
+
+    No-op unless the device exposes ``get_elbow_directions_world`` (Captury) and
+    the embodiment supports ``apply_teleop_elbow_targets`` (Alex ability hands
+    with elbow tracking enabled).
+    """
+    if embodiment is None or not hasattr(embodiment, "apply_teleop_elbow_targets"):
+        return
+    if not hasattr(teleop_interface, "get_elbow_directions_world"):
+        return
+    embodiment.apply_teleop_elbow_targets(env, teleop_interface.get_elbow_directions_world())
+
+
 def setup_teleop_device(callbacks: dict[str, Callable]) -> object:
     """Set up the teleoperation device based on configuration.
 
@@ -279,9 +293,17 @@ def setup_teleop_device(callbacks: dict[str, Callable]) -> object:
     Raises:
         Exception: If teleop device creation fails
     """
+    from isaaclab_arena.teleop.captury.captury_teleop_device import CapturyDeviceCfg, create_captury_teleop_device
+
     teleop_interface = None
     try:
-        if hasattr(env_cfg, "isaac_teleop") and isinstance(env_cfg.isaac_teleop, IsaacTeleopCfg):
+        if hasattr(env_cfg, "isaac_teleop") and isinstance(env_cfg.isaac_teleop, CapturyDeviceCfg):
+            teleop_interface = create_captury_teleop_device(
+                env_cfg.isaac_teleop,
+                sim_device=env_cfg.sim.device,
+                callbacks=callbacks,
+            )
+        elif hasattr(env_cfg, "isaac_teleop") and isinstance(env_cfg.isaac_teleop, IsaacTeleopCfg):
             teleop_interface = create_isaac_teleop_device(
                 env_cfg.isaac_teleop,
                 sim_device=env_cfg.sim.device,
@@ -469,7 +491,9 @@ def run_simulation_loop(
 
     teleop_interface = setup_teleop_device(teleoperation_callbacks)
     teleop_interface.add_callback("R", reset_recording_instance)
-    use_isaac_teleop = args_cli.xr
+    # Devices built on the IsaacTeleop pipeline stack (OpenXR, Captury) are
+    # context managers and must be entered before advance().
+    use_isaac_teleop = hasattr(teleop_interface, "__enter__") and hasattr(teleop_interface, "__exit__")
 
     label_text = f"Recorded {current_recorded_demo_count} successful demonstrations."
     instruction_display = setup_ui(label_text, env)
@@ -499,10 +523,14 @@ def run_simulation_loop(
                     omni.log.warn("Skipping teleop step: non-finite action from IsaacTeleop.")
                     env.sim.render()
                     continue
-                if running_recording_instance and embodiment is not None and hasattr(
-                    embodiment, "stabilize_teleop_action"
+                if (
+                    running_recording_instance
+                    and embodiment is not None
+                    and hasattr(embodiment, "stabilize_teleop_action")
                 ):
                     action = embodiment.stabilize_teleop_action(env, action)
+                if running_recording_instance:
+                    _apply_teleop_elbow_targets(embodiment, teleop_interface, env)
                 # Expand to batch dimension
                 actions = action.repeat(env.num_envs, 1)
 
