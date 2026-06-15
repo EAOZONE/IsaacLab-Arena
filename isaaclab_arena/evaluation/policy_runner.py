@@ -21,6 +21,7 @@ from isaaclab_arena.utils.random import set_seed
 from isaaclab_arena_environments.cli import get_arena_builder_from_cli, get_isaaclab_arena_environments_cli_parser
 
 if TYPE_CHECKING:
+    from isaaclab_arena.evaluation.perturbation import ArmPoke
     from isaaclab_arena.policy.policy_base import PolicyBase
 
 
@@ -63,6 +64,7 @@ def rollout_policy(
     num_steps: int | None,
     num_episodes: int | None,
     language_instruction: str | None = None,
+    perturbation: "ArmPoke | None" = None,
 ) -> dict[str, Any]:
     assert num_steps is not None or num_episodes is not None, "Either num_steps or num_episodes must be provided"
     assert num_steps is None or num_episodes is None, "Only one of num_steps or num_episodes must be provided"
@@ -84,11 +86,19 @@ def rollout_policy(
 
         num_episodes_completed = 0
         num_steps_completed = 0
+        episode_step = 0
+
+        # Ramp the poke each episode: episode k (1-based) runs at k x the base wrench.
+        if perturbation is not None:
+            perturbation.set_episode_scale(1.0)
 
         while True:
             with torch.inference_mode():
                 actions = policy.get_action(env, obs)
+                if perturbation is not None:
+                    perturbation.apply(episode_step)
                 obs, _, terminated, truncated, _ = env.step(actions)
+                episode_step += 1
 
                 if terminated.any() or truncated.any():
                     # Only reset policy for those envs that are terminated or truncated
@@ -98,9 +108,14 @@ def rollout_policy(
                     )
                     env_ids = (terminated | truncated).nonzero().flatten()
                     policy.reset(env_ids=env_ids)
+                    # Per-episode poke counter restarts so each new episode gets poked.
+                    episode_step = 0
                     # Break if number of episodes is reached
                     completed_episodes = env_ids.shape[0]
                     num_episodes_completed += completed_episodes
+                    # Ramp the poke for the upcoming episode (1-based: episode k -> k x base).
+                    if perturbation is not None:
+                        perturbation.set_episode_scale(num_episodes_completed + 1)
                     if hasattr(env.unwrapped.cfg, "metrics") and env.unwrapped.cfg.metrics is not None:
                         metrics = env.unwrapped.compute_metrics()
                         tqdm.tqdm.write(
@@ -176,6 +191,15 @@ def main():
         render_mode = "rgb_array" if args_cli.video else None
         env, cfg = arena_builder.make_registered_and_return_cfg(render_mode=render_mode)
 
+        # Optionally shorten episodes so they time out (and reset) sooner. max_episode_length is a
+        # live property of episode_length_s, so overriding the cfg here takes effect immediately.
+        if args_cli.episode_length_s is not None:
+            env.unwrapped.cfg.episode_length_s = args_cli.episode_length_s
+            print(
+                f"[Rank {local_rank}/{world_size}] Episode length overridden ->"
+                f" {args_cli.episode_length_s}s ({env.unwrapped.max_episode_length} steps)"
+            )
+
         # Per-rank seed when distributed so each process has a different seed
         seed = args_cli.seed
         if seed is not None and is_distributed(args_cli):
@@ -241,9 +265,36 @@ def main():
                 f" {args_cli.video_dir}"
             )
 
+        # Optionally build an external-force perturbation ("poke") to bump the arm
+        # off its expected trajectory during rollout and test policy robustness.
+        perturbation = None
+        if args_cli.poke:
+            from isaaclab_arena.evaluation.perturbation import ArmPoke
+
+            perturbation = ArmPoke(
+                env,
+                body=args_cli.poke_body,
+                force=tuple(args_cli.poke_force),
+                torque=tuple(args_cli.poke_torque),
+                start_step=args_cli.poke_start_step,
+                duration=args_cli.poke_duration,
+                period=args_cli.poke_period,
+                is_global=(args_cli.poke_frame == "world"),
+                show_marker=args_cli.poke_marker,
+            )
+            print(
+                f"[Rank {local_rank}/{world_size}] Poke enabled: force={args_cli.poke_force}"
+                f" torque={args_cli.poke_torque} ({args_cli.poke_frame} frame) on {perturbation.body_names}"
+                f" for {args_cli.poke_duration} steps starting at step {args_cli.poke_start_step}"
+                + (f", repeating every {args_cli.poke_period} steps" if args_cli.poke_period else "")
+                + " (base wrench; ramped k x on episode k)"
+            )
+
         steps_str = f"{num_steps} steps" if num_steps is not None else f"{num_episodes} episodes"
         print(f"[Rank {local_rank}/{world_size}] Starting rollout ({steps_str})")
-        metrics = rollout_policy(env, policy, num_steps, num_episodes, args_cli.language_instruction)
+        metrics = rollout_policy(
+            env, policy, num_steps, num_episodes, args_cli.language_instruction, perturbation=perturbation
+        )
 
         if metrics is not None:
             print(f"[Rank {local_rank}/{world_size}] Metrics: {metrics_to_plain_python_types(metrics)}")

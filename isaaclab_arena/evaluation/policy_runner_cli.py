@@ -27,6 +27,15 @@ def add_policy_runner_arguments(parser: argparse.ArgumentParser) -> None:
         help="Number of episodes to run the policy (if num_steps is not provided)",
     )
     parser.add_argument(
+        "--episode_length_s",
+        type=float,
+        default=None,
+        help=(
+            "Override the environment's episode length [s] so episodes time out (reset) sooner."
+            " Default: use the environment's own value."
+        ),
+    )
+    parser.add_argument(
         "--language_instruction",
         type=str,
         default=None,
@@ -54,4 +63,66 @@ def add_policy_runner_arguments(parser: argparse.ArgumentParser) -> None:
             "Record one mp4 per camera in obs['camera_obs'] (what the policy actually sees)."
             " Independent of --video; use either or both."
         ),
+    )
+    # --- Perturbation ("poke") -------------------------------------------------
+    # Apply a constant external force to a robot link for a window of steps to
+    # bump the arm off its expected trajectory and test policy robustness.
+    parser.add_argument(
+        "--poke",
+        action="store_true",
+        default=False,
+        help="Apply an external-force perturbation to a robot link during rollout (robustness test).",
+    )
+    parser.add_argument(
+        "--poke_body",
+        type=str,
+        default="RIGHT_ELBOW_Y_LINK",
+        help="Body name (or regex) the poke force is applied to. Default: RIGHT_ELBOW_Y_LINK (Alex right forearm).",
+    )
+    parser.add_argument(
+        "--poke_force",
+        type=float,
+        nargs=3,
+        metavar=("FX", "FY", "FZ"),
+        default=[0.0, 40.0, 0.0],
+        help="Poke force [N] as 'FX FY FZ'. Frame set by --poke_frame. Default: 0 40 0.",
+    )
+    parser.add_argument(
+        "--poke_torque",
+        type=float,
+        nargs=3,
+        metavar=("TX", "TY", "TZ"),
+        default=[0.0, 0.0, 0.0],
+        help="Poke torque [N*m] as 'TX TY TZ'. Default: 0 0 0.",
+    )
+    parser.add_argument(
+        "--poke_frame",
+        type=str,
+        choices=["world", "body"],
+        default="world",
+        help="Frame the poke force/torque is expressed in. Default: world.",
+    )
+    parser.add_argument(
+        "--poke_start_step",
+        type=int,
+        default=60,
+        help="Per-episode step at which the poke begins. Default: 60.",
+    )
+    parser.add_argument(
+        "--poke_duration",
+        type=int,
+        default=5,
+        help="Number of control steps the poke force is held. Default: 5.",
+    )
+    parser.add_argument(
+        "--poke_period",
+        type=int,
+        default=None,
+        help="If set, repeat the poke every N per-episode steps (default: single poke per episode).",
+    )
+    parser.add_argument(
+        "--poke_marker",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Show a red arrow at the poked link while the poke is active. Use --no-poke_marker to disable.",
     )
