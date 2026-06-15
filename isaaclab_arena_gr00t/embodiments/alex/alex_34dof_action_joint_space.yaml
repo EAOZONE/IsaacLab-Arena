@@ -4,7 +4,9 @@
 # SPDX-License-Identifier: Apache-2.0
 
 # Column order for ``processed_actions`` from Alex ability-hands Pink IK teleop recordings.
-# Layout: arm+wrist IK targets (14) + teleop hand joint order (20).
+# Pink uses ``find_joints(..., preserve_order=False)``, so columns follow articulation
+# index order — not the query-list order of ``joint_names`` below.  Joint *names* are
+# still correct; only the index assignments in this file are nominal.
 joints:
   LEFT_SHOULDER_Y: 0
   LEFT_SHOULDER_X: 1

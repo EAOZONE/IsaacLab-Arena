@@ -150,6 +150,35 @@ def test_ability_hand_mimic_env_action_dim():
     assert action.shape == (ALEX_ABILITY_HAND_TOTAL_ACTION_DIM,)
 
 
+def test_joint_position_embodiment_action_layout():
+    from isaaclab_arena.embodiments.alex.alex import (
+        ABILITY_HAND_TELEOP_JOINT_ORDER,
+        ALEX_V1,
+        ALEX_V2,
+        ARM_WRIST_JOINT_NAMES_LIST,
+        AlexAbilityHandJointPositionActionsCfg,
+        AlexAbilityHandJointPositionEmbodiment,
+        AlexV2AbilityHandJointPositionEmbodiment,
+    )
+
+    expected = ARM_WRIST_JOINT_NAMES_LIST + ABILITY_HAND_TELEOP_JOINT_ORDER
+    assert AlexAbilityHandJointPositionActionsCfg().joint_pos.joint_names == expected
+
+    for cls, version in (
+        (AlexAbilityHandJointPositionEmbodiment, ALEX_V1),
+        (AlexV2AbilityHandJointPositionEmbodiment, ALEX_V2),
+    ):
+        assert cls.robot_version == version
+        assert cls.name.endswith("joint_pos")
+        embodiment = cls()
+        assert embodiment.robot_version == version
+        assert embodiment.action_config.joint_pos.joint_names == expected
+        assert embodiment.action_config.joint_pos.preserve_order is False
+        assert embodiment.action_config.joint_pos.use_default_offset is False
+        assert embodiment.action_config.joint_pos.offset == 0.0
+        assert embodiment.scene_config.robot.spawn.fix_base is True
+
+
 def test_hand_joint_order_is_permutation_of_urdf_joint_list():
     from isaaclab_arena.embodiments.alex.alex import (
         ABILITY_HAND_JOINT_NAMES_LIST,

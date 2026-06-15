@@ -59,6 +59,20 @@ parser.add_argument(
     default=False,
     help="Disable calling env.sim.reset() to fully clear sim context buffers before each episode recording.",
 )
+parser.add_argument(
+    "--head_view",
+    action="store_true",
+    default=False,
+    help="Pin the Kit viewport camera at the robot's HEAD_LINK position (static, does not track the head) "
+    "looking at the task object, with a widened field of view. Useful as a first-person operator view.",
+)
+parser.add_argument(
+    "--head_view_focal",
+    type=float,
+    default=12.0,
+    help="Focal length [mm] of the viewport camera when --head_view is set. Lower = wider FOV "
+    "(default 12.0; Kit default is ~18.15).",
+)
 # Add the example environments CLI args
 # NOTE(alexmillane, 2025.09.04): This has to be added last, because
 # of the app specific flags being parsed after the global flags.
@@ -430,6 +444,59 @@ def handle_reset(
     return success_step_count
 
 
+def apply_head_view(env: gym.Env, focal_length_mm: float) -> None:
+    """Pin the viewport camera at the robot head, static, with a widened FOV.
+
+    Reads the HEAD_LINK world position from the ``robot`` articulation and points
+    the Kit viewport camera at the task object. The camera is set once via
+    ``sim.set_camera_view`` (origin stays in the world frame), so it does not
+    track the head as the robot moves. The field of view is widened by lowering
+    the persp camera prim's focal length.
+
+    No-op if the robot or its HEAD_LINK body is unavailable.
+
+    Args:
+        env: The (unwrapped) environment instance.
+        focal_length_mm: Focal length to set on the viewport camera. Lower values
+            give a wider field of view.
+    """
+    import warp as wp
+
+    if "robot" not in env.scene.articulations:
+        omni.log.warn("--head_view: no 'robot' articulation in scene; skipping head view.")
+        return
+    robot = env.scene["robot"]
+    head_body_ids, _ = robot.find_bodies(["HEAD_LINK"])
+    if not head_body_ids:
+        omni.log.warn("--head_view: robot has no HEAD_LINK body; skipping head view.")
+        return
+    head_idx = int(head_body_ids[0])
+    eye = wp.to_torch(robot.data.body_pos_w)[0, head_idx].cpu().tolist()
+
+    # Aim at the microwave/task object if present, else look forward along world +x.
+    target = None
+    for key in ("microwave",):
+        if key in env.scene.articulations or key in env.scene.rigid_objects:
+            target = wp.to_torch(env.scene[key].data.root_pos_w)[0].cpu().tolist()
+            break
+    if target is None:
+        target = [eye[0] + 1.0, eye[1], eye[2] - 0.2]
+
+    env.sim.set_camera_view(eye=tuple(eye), target=tuple(target))
+
+    # Widen FOV: focal length lives on the camera prim, not in ViewerCfg.
+    import isaacsim.core.utils.prims as prim_utils
+
+    cam_path = getattr(env.cfg.viewer, "cam_prim_path", "/OmniverseKit_Persp")
+    cam_prim = prim_utils.get_prim_at_path(cam_path)
+    focal_attr = cam_prim.GetAttribute("focalLength")
+    if focal_attr.IsValid():
+        focal_attr.Set(float(focal_length_mm))
+        print(f"--head_view: viewport at HEAD_LINK {tuple(round(v, 3) for v in eye)}, focal {focal_length_mm} mm")
+    else:
+        omni.log.warn(f"--head_view: no focalLength attribute on {cam_path}; FOV unchanged.")
+
+
 def run_simulation_loop(
     env: gym.Env,
     teleop_interface: object | None,
@@ -507,6 +574,10 @@ def run_simulation_loop(
         reset_sim_context_buffers(env)
         env.reset()
         teleop_interface.reset()
+
+        # Pin a static first-person viewport at the head once the robot pose is valid.
+        if args_cli.head_view:
+            apply_head_view(env, args_cli.head_view_focal)
 
         subtasks = {}
         stack_name = "IsaacTeleop" if use_isaac_teleop else "native"

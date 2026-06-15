@@ -1770,13 +1770,17 @@ class AlexV2AbilityHandEmbodiment(AlexAbilityHandEmbodiment):
 class AlexAbilityHandJointPositionActionsCfg:
     """Direct joint-position actions for Alex with Ability Hands.
 
-    Layout matches ``alex_34dof_action_joint_space.yaml``:
-      arms+wrists 0-13  (ARM_WRIST_JOINT_NAMES_LIST order)
-      hands       14-33 (ABILITY_HAND_TELEOP_JOINT_ORDER)
+    Layout uses the same joint *names* as ``alex_34dof_action_joint_space.yaml``,
+    but column order follows articulation index order (``preserve_order=False``),
+    matching Pink IK ``processed_actions`` from teleop recordings.
 
-    ``preserve_order=True`` is required because ABILITY_HAND_TELEOP_JOINT_ORDER
-    groups all q1 joints before all q2 joints, while the articulation interleaves
-    them per-finger (index_q1, index_q2, middle_q1, …).
+    ``preserve_order=False`` is required to match Pink IK ``processed_actions``.
+    Pink resolves joints with ``find_joints(..., preserve_order=False)``, which
+    orders columns by articulation index — not by the query list order documented
+    in ``alex_34dof_action_joint_space.yaml``.  (``preserve_order=True`` would
+    follow the query list and scramble recorded actions at playback.)
+
+    Actions are absolute sim joint targets with no extra offset.
     """
 
     joint_pos = JointPositionActionCfg(
@@ -1784,8 +1788,7 @@ class AlexAbilityHandJointPositionActionsCfg:
         joint_names=ARM_WRIST_JOINT_NAMES_LIST + ABILITY_HAND_TELEOP_JOINT_ORDER,
         scale=1.0,
         use_default_offset=False,
-        preserve_order=True,
-        offset={".*GRIPPER_Z": -math.pi / 2},
+        preserve_order=False,
     )
 
 
@@ -1796,8 +1799,9 @@ class AlexAbilityHandJointPositionEmbodiment(EmbodimentBase):
     Drop-in policy-eval counterpart to :class:`AlexAbilityHandEmbodiment`.
     Accepts 34-DOF absolute joint position commands in the order defined by
     ``alex_34dof_action_joint_space.yaml`` (arms 0-13, hands 14-33).
-    Use this embodiment when the policy was trained on direct joint-angle data
-    (e.g. ``H2Ozone/alex_demo``) rather than PINK IK wrist-pose targets.
+
+    Use for policies trained on ``processed_actions`` from ability-hands teleop
+    (Pink IK) or CCIL BC checkpoints derived from those demos.
     """
 
     name = "alex_ability_hands_joint_pos"
@@ -1812,9 +1816,11 @@ class AlexAbilityHandJointPositionEmbodiment(EmbodimentBase):
     ):
         super().__init__(enable_cameras, initial_pose)
 
+        # Match teleop physics (fixed base, stiff arm tracking) so recorded
+        # processed_actions replay faithfully; only the action interface differs.
         robot_cfg, _resolved_urdf, _pink_ik_urdf = _configure_ability_hand_robot(
             self.robot_version,
-            teleop=False,
+            teleop=True,
         )
 
         self.scene_config = AlexSceneCfg()
@@ -1833,7 +1839,12 @@ class AlexAbilityHandJointPositionEmbodiment(EmbodimentBase):
 
 @register_asset
 class AlexV2AbilityHandJointPositionEmbodiment(AlexAbilityHandJointPositionEmbodiment):
-    """Alex V2 with Ability Hands using direct joint-position actions (no IK)."""
+    """Alex V2 with Ability Hands using direct joint-position actions (no IK).
+
+    Drop-in policy-eval counterpart to :class:`AlexV2AbilityHandEmbodiment`.
+    Use with CCIL / joint-position BC policies whose actions match
+    ``alex_34dof_action_joint_space.yaml`` (e.g. ``processed_actions`` from teleop).
+    """
 
     name = "alex_v2_ability_hands_joint_pos"
     robot_version = ALEX_V2

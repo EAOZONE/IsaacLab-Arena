@@ -1,0 +1,44 @@
+seed: 42
+no_gpu: False
+# Not instantiated for BC training / augmentation (only CCIL's own gym eval, which we
+# skip — evaluation happens in Isaac Lab Arena). state_dim=49 / action_dim=34 are
+# inferred from the pickle, not declared here.
+env: "alex_open_microwave"
+output:
+  location: "output/alex_microwave/"
+  folder_suffix: ""
+data:
+  expert: None
+  pkl: '/home/bpratt/datasets/alex_microwave/ccil/alex_microwave.pkl'
+  num_traj: '...'
+  horizon: '...'
+  num_datapoints: '...'
+dynamics:
+  lipschitz_type: "soft_sampling"
+  lipschitz_constraint: 2.0
+  soft_lipschitz_penalty_weight: 0.0005
+  soft_lipschitz_sampling_eps: 0.0003
+  soft_lipschitz_n_samples: 5
+  lr: 0.001
+  weight_decay: 0.00001
+  layers: [512, 512]
+  activation: relu
+  train_epochs: 200
+  batch_size: 256
+  val_percentage: 1
+aug:
+  type: 'backward_euler'
+  max_iter: 50
+  num_labels: 20
+  delta: 0.00001
+  epsilon: 10.0
+  balance_data: False
+  use_expert_label: False
+policy:
+  naive: False
+  noise_bc: 0.0
+  lr: 0.001
+  batch_size: 256
+  train_epochs: 200
+eval:
+  noise: [0.0]
