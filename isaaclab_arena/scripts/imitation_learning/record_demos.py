@@ -24,6 +24,8 @@ optional arguments:
     --step_hz                 Environment stepping rate in Hz. (default: 30)
     --num_demos               Number of demonstrations to record. (default: 0)
     --num_success_steps       Number of continuous steps with task success for concluding a demo as successful. (default: 10)
+    --timed_episode_s         If set, export each recording as success after this many seconds and auto-reset,
+                              ignoring task success (useful for mocap batch collection with manual curation).
     --disable_full_sim_buffer_reset
                               Disable env.sim.reset() calls that fully clear sim context buffers before each episode. (default: False)
 """
@@ -51,6 +53,13 @@ parser.add_argument(
     type=int,
     default=10,
     help="Number of continuous steps with task success for concluding a demo as successful. Default is 10.",
+)
+parser.add_argument(
+    "--timed_episode_s",
+    type=float,
+    default=None,
+    help="Export each active recording as success after this many seconds, then auto-reset. "
+    "Bypasses task success checks; use for batch mocap collection with manual curation.",
 )
 parser.add_argument(
     "--disable_full_sim_buffer_reset",
@@ -125,6 +134,12 @@ from isaaclab.managers import DatasetExportMode
 from isaaclab_mimic.ui.instruction_display import InstructionDisplay, show_subtask_instructions
 from isaaclab_teleop import IsaacTeleopCfg, create_isaac_teleop_device, remove_camera_configs
 
+from isaaclab_arena.teleop.captury.captury_teleop_device import (
+    CapturyDeviceCfg,
+    CapturyTeleopDevice,
+    advance_captury_with_env_anchor,
+    create_captury_teleop_device,
+)
 from isaaclab_arena.utils.cameras import clear_rtx_camera_output_buffers
 from isaaclab_arena.utils.isaaclab_utils.recorders import ArenaEnvRecorderManagerCfg
 
@@ -307,8 +322,6 @@ def setup_teleop_device(callbacks: dict[str, Callable]) -> object:
     Raises:
         Exception: If teleop device creation fails
     """
-    from isaaclab_arena.teleop.captury.captury_teleop_device import CapturyDeviceCfg, create_captury_teleop_device
-
     teleop_interface = None
     try:
         if hasattr(env_cfg, "isaac_teleop") and isinstance(env_cfg.isaac_teleop, CapturyDeviceCfg):
@@ -374,6 +387,13 @@ def setup_ui(label_text: str, env: gym.Env) -> InstructionDisplay:
     return instruction_display
 
 
+def export_episode_as_success(env: gym.Env) -> None:
+    """Mark the current episode successful and write it to the dataset file."""
+    env.recorder_manager.record_pre_reset([0], force_export_or_skip=False)
+    env.recorder_manager.set_success_to_episodes([0], torch.tensor([[True]], dtype=torch.bool, device=env.device))
+    env.recorder_manager.export_episodes([0])
+
+
 def process_success_condition(env: gym.Env, success_term: object | None, success_step_count: int) -> tuple[int, bool]:
     """Process the success condition for the current step.
 
@@ -396,11 +416,7 @@ def process_success_condition(env: gym.Env, success_term: object | None, success
     if bool(success_term.func(env, **success_term.params)[0]):
         success_step_count += 1
         if success_step_count >= args_cli.num_success_steps:
-            env.recorder_manager.record_pre_reset([0], force_export_or_skip=False)
-            env.recorder_manager.set_success_to_episodes(
-                [0], torch.tensor([[True]], dtype=torch.bool, device=env.device)
-            )
-            env.recorder_manager.export_episodes([0])
+            export_episode_as_success(env)
             print("Success condition met! Recording completed.")
             return success_step_count, True
     else:
@@ -523,6 +539,8 @@ def run_simulation_loop(
     success_step_count = 0
     should_reset_recording_instance = False
     running_recording_instance = not args_cli.xr
+    episode_recording_start_time: float | None = None
+    timed_episode_s = args_cli.timed_episode_s
 
     # Callback closures for the teleop device
     def reset_recording_instance():
@@ -537,8 +555,9 @@ def run_simulation_loop(
         print("Recording instance reset requested")
 
     def start_recording_instance():
-        nonlocal running_recording_instance
+        nonlocal running_recording_instance, episode_recording_start_time
         running_recording_instance = True
+        episode_recording_start_time = time.time()
         if embodiment is not None and hasattr(embodiment, "begin_teleop_action_warmup"):
             embodiment.begin_teleop_action_warmup()
         print("Recording started")
@@ -568,12 +587,38 @@ def run_simulation_loop(
     def inner_loop():
         """Inner loop function with access to nonlocal variables."""
         nonlocal current_recorded_demo_count, success_step_count, should_reset_recording_instance
-        nonlocal running_recording_instance, label_text
+        nonlocal running_recording_instance, label_text, episode_recording_start_time
+
+        def maybe_finish_timed_episode() -> None:
+            nonlocal should_reset_recording_instance
+            if (
+                timed_episode_s is not None
+                and running_recording_instance
+                and episode_recording_start_time is not None
+                and time.time() - episode_recording_start_time >= timed_episode_s
+            ):
+                export_episode_as_success(env)
+                print(f"Timed episode complete ({timed_episode_s:g}s). Exporting and resetting.")
+                should_reset_recording_instance = True
+
+        def perform_episode_reset() -> None:
+            nonlocal success_step_count, should_reset_recording_instance, episode_recording_start_time
+            success_step_count = handle_reset(env, success_step_count, instruction_display, label_text)
+            teleop_interface.reset()
+            if embodiment is not None and hasattr(embodiment, "reset_teleop_action_warmup"):
+                embodiment.reset_teleop_action_warmup()
+            if running_recording_instance:
+                episode_recording_start_time = time.time()
+            else:
+                episode_recording_start_time = None
+            should_reset_recording_instance = False
 
         # Reset before starting
         reset_sim_context_buffers(env)
         env.reset()
         teleop_interface.reset()
+        if running_recording_instance:
+            episode_recording_start_time = time.time()
 
         # Pin a static first-person viewport at the head once the robot pose is valid.
         if args_cli.head_view:
@@ -581,14 +626,23 @@ def run_simulation_loop(
 
         subtasks = {}
         stack_name = "IsaacTeleop" if use_isaac_teleop else "native"
-        print(f"{stack_name} recording started.")
+        if timed_episode_s is not None:
+            print(f"{stack_name} recording started (timed episodes: {timed_episode_s:g}s, forced success).")
+        else:
+            print(f"{stack_name} recording started.")
 
         with contextlib.suppress(KeyboardInterrupt), torch.inference_mode():
             while simulation_app.is_running():
                 # Get teleop command (may be None while waiting for session start)
-                action = teleop_interface.advance()
+                if isinstance(teleop_interface, CapturyTeleopDevice):
+                    action = advance_captury_with_env_anchor(teleop_interface, env, embodiment)
+                else:
+                    action = teleop_interface.advance()
                 if action is None:
+                    maybe_finish_timed_episode()
                     env.sim.render()
+                    if should_reset_recording_instance:
+                        perform_episode_reset()
                     continue
                 if not torch.isfinite(action).all():
                     omni.log.warn("Skipping teleop step: non-finite action from IsaacTeleop.")
@@ -617,13 +671,16 @@ def run_simulation_loop(
                 else:
                     env.sim.render()
 
-                # Check for success condition
-                success_step_count_new, success_reset_needed = process_success_condition(
-                    env, success_term, success_step_count
-                )
-                success_step_count = success_step_count_new
-                if success_reset_needed:
-                    should_reset_recording_instance = True
+                # Timed episodes: export as success and reset after the configured duration.
+                maybe_finish_timed_episode()
+                if timed_episode_s is None:
+                    # Check for task success condition
+                    success_step_count_new, success_reset_needed = process_success_condition(
+                        env, success_term, success_step_count
+                    )
+                    success_step_count = success_step_count_new
+                    if success_reset_needed:
+                        should_reset_recording_instance = True
 
                 # Update demo count if it has changed
                 if env.recorder_manager.exported_successful_episode_count > current_recorded_demo_count:
@@ -649,11 +706,7 @@ def run_simulation_loop(
 
                 # Handle reset if requested
                 if should_reset_recording_instance:
-                    success_step_count = handle_reset(env, success_step_count, instruction_display, label_text)
-                    teleop_interface.reset()
-                    if embodiment is not None and hasattr(embodiment, "reset_teleop_action_warmup"):
-                        embodiment.reset_teleop_action_warmup()
-                    should_reset_recording_instance = False
+                    perform_episode_reset()
 
                 # Check if simulation is stopped
                 if env.sim.is_stopped():

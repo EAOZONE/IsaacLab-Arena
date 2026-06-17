@@ -18,7 +18,9 @@
 
 """IsaacTeleop pipeline source node that emits hand data from Captury Live."""
 
+import logging
 import numpy as np
+import os
 from scipy.spatial.transform import Rotation
 from typing import Protocol
 
@@ -34,11 +36,26 @@ from isaacteleop.retargeting_engine.interface.tensor_group_type import OptionalT
 from isaacteleop.retargeting_engine.tensor_types import HandInput, HandInputIndex
 
 from isaaclab_arena.teleop.captury.captury_skeleton import (
+    NUM_OPENXR_HAND_JOINTS,
+    OPENXR_INDEX_TIP,
+    OPENXR_LITTLE_TIP,
+    OPENXR_MIDDLE_TIP,
+    OPENXR_RING_TIP,
+    OPENXR_THUMB_TIP,
+    OPENXR_WRIST,
     CapturySkeletonMap,
     captury_hand_to_openxr_arrays,
     default_captury_skeleton_map,
     prepare_captury_joint_matrices,
 )
+
+logger = logging.getLogger(__name__)
+
+# Set CAPTURY_DEBUG_FINGERS=1 (or a stride N) to log per-hand finger-spread
+# metrics every N frames. Markerless finger tracking that under-reports spread
+# shows up here as small wrist->fingertip / inter-fingertip distances, which is
+# what drives the DexPilot ability-hand retargeting to a "stuck closed" pose.
+_DEBUG_FINGERS_STRIDE = int(os.environ.get("CAPTURY_DEBUG_FINGERS", "0") or "0")
 
 
 class SupportsLatestTransforms(Protocol):
@@ -109,6 +126,7 @@ class CapturyHandsSource(BaseRetargeter):
         self._wrist_rotation_offset_xyzw = wrist_rotation_offset_xyzw
         self._euler_degrees = euler_degrees
         self._torso_relative = torso_relative
+        self._debug_frame_count = 0
         super().__init__(name)
 
     def input_spec(self) -> RetargeterIOType:
@@ -151,7 +169,47 @@ class CapturyHandsSource(BaseRetargeter):
                 side,
                 wrist_rotation_offset_xyzw=self._wrist_rotation_offset_xyzw,
             )
+            if _DEBUG_FINGERS_STRIDE:
+                self._log_finger_spread(side, positions, valid)
             self._write_hand_group(group, positions, orientations, valid)
+        if _DEBUG_FINGERS_STRIDE:
+            self._debug_frame_count += 1
+
+    def _log_finger_spread(self, side: str, positions: np.ndarray, valid: np.ndarray) -> None:
+        """Log finger-spread metrics that drive the DexPilot ability-hand grasp.
+
+        Reports, for the keypoints DexPilot actually consumes (wrist + 5
+        fingertips), the wrist->fingertip distances and the thumb->finger
+        distances. Small values mean the operator's hand is reaching the
+        retargeter as under-spread/curled, which produces a "stuck closed"
+        robot hand regardless of how open the real hand is.
+        """
+        if self._debug_frame_count % _DEBUG_FINGERS_STRIDE != 0:
+            return
+        if positions.shape[0] < NUM_OPENXR_HAND_JOINTS or not valid.any():
+            return
+        tips = {
+            "thumb": OPENXR_THUMB_TIP,
+            "index": OPENXR_INDEX_TIP,
+            "middle": OPENXR_MIDDLE_TIP,
+            "ring": OPENXR_RING_TIP,
+            "pinky": OPENXR_LITTLE_TIP,
+        }
+        wrist = positions[OPENXR_WRIST]
+        reach = {name: float(np.linalg.norm(positions[idx] - wrist)) for name, idx in tips.items()}
+        thumb = positions[tips["thumb"]]
+        pinch = {
+            name: float(np.linalg.norm(positions[tips[name]] - thumb))
+            for name in ("index", "middle", "ring", "pinky")
+        }
+        n_valid = int(valid.sum())
+        logger.info(
+            "[captury fingers %-5s] valid=%2d/26 wrist->tip(cm)=%s thumb->tip(cm)=%s",
+            side,
+            n_valid,
+            {k: round(v * 100, 1) for k, v in reach.items()},
+            {k: round(v * 100, 1) for k, v in pinch.items()},
+        )
 
     @staticmethod
     def _write_hand_group(

@@ -79,7 +79,12 @@ def _create_teleop_interface(env_cfg, env, teleoperation_callbacks: dict[str, Ca
     Returns:
         The teleop device, or ``None`` if the requested device is unsupported.
     """
-    from isaaclab_arena.teleop.captury.captury_teleop_device import CapturyDeviceCfg, create_captury_teleop_device
+    from isaaclab_arena.teleop.captury.captury_teleop_device import (
+        CapturyDeviceCfg,
+        CapturyTeleopDevice,
+        advance_captury_with_env_anchor,
+        create_captury_teleop_device,
+    )
 
     if hasattr(env_cfg, "isaac_teleop") and isinstance(env_cfg.isaac_teleop, CapturyDeviceCfg):
         return create_captury_teleop_device(
@@ -262,7 +267,10 @@ def main() -> None:
         while simulation_app.is_running():
             try:
                 with torch.inference_mode():
-                    action = teleop_interface.advance()
+                    if isinstance(teleop_interface, CapturyTeleopDevice):
+                        action = advance_captury_with_env_anchor(teleop_interface, env, embodiment)
+                    else:
+                        action = teleop_interface.advance()
                     # action is None when IsaacTeleop session hasn't started yet (e.g. waiting for "Start AR")
                     if action is None:
                         env.sim.render()

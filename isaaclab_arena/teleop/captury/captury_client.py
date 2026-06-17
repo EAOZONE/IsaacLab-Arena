@@ -20,10 +20,33 @@
 
 import logging
 import numpy as np
+import signal
 import threading
 import time
 
 logger = logging.getLogger(__name__)
+
+
+def _restore_default_fault_signal_handlers() -> None:
+    """Undo IsaacLab's SIGSEGV/SIGABRT/SIGTERM handlers before going async.
+
+    ``AppLauncher`` installs ``_abort_signal_handle_callback`` for SIGSEGV,
+    SIGABRT and SIGTERM (app_launcher.py); that handler calls
+    ``simulation_app.close()``, which itself imports modules. When the
+    RemoteCaptury native receive thread raises one of these signals, the import
+    inside ``close()`` re-enters the handler, recursing ``close()`` until the
+    stack overflows -> segfault (or a silent app exit). Restoring the OS default
+    handlers around the Captury connection breaks that recursion; a genuine
+    fault then cores normally instead of hanging the whole teleop session.
+    SIGINT is left untouched so Ctrl+C still stops teleop cleanly.
+    """
+    for sig in (signal.SIGSEGV, signal.SIGABRT, signal.SIGTERM):
+        try:
+            if signal.getsignal(sig) not in (signal.SIG_DFL, signal.SIG_IGN, None):
+                signal.signal(sig, signal.SIG_DFL)
+        except (ValueError, OSError, RuntimeError) as e:
+            # Not on the main thread, or platform restriction; best-effort only.
+            logger.debug(f"Could not restore default handler for {sig}: {e}")
 
 
 # Actor tracking modes reported by the RemoteCaptury actor-changed callback.
@@ -112,6 +135,10 @@ class CapturyClient:
                 "  cd RemoteCaptury/python && bash prepare_build.sh\n"
                 "  /isaac-sim/python.sh -m pip install ."
             ) from e
+
+        # The native receive thread can trip IsaacLab's recursive abort-signal
+        # handler and segfault the whole session; restore default handlers first.
+        _restore_default_fault_signal_handlers()
 
         self._remote = RemoteCaptury()
         if not self._remote.connect(self.host, self.port):

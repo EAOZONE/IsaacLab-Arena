@@ -30,6 +30,7 @@ Isaac Sim) so it can be unit-tested anywhere.
 """
 
 import numpy as np
+import os
 import re
 from dataclasses import dataclass, field
 from scipy.spatial.transform import Rotation
@@ -670,6 +671,80 @@ def captury_hand_to_openxr_arrays(
     valid[OPENXR_PALM] = 1
 
     return positions, orientations, valid
+
+
+# Ability Hand finger flexion mapping. The four non-thumb fingers each have a
+# single driven joint ``q1`` whose URDF range is [0 (open) .. ABILITY_FINGER_Q1_MAX
+# (closed)]. DexPilot fingertip-position retargeting is bistable for the ulnar
+# fingers (ring/pinky snap to a limit and latch), so the Captury path instead
+# maps each finger's measured bend angle directly to ``q1``.
+ABILITY_FINGER_Q1_MAX = 1.74
+ABILITY_FINGER_OPEN_ANGLE_DEG = float(os.environ.get("CAPTURY_FINGER_OPEN_ANGLE_DEG", "170.0"))
+"""Finger bend angle [deg] treated as fully open (``q1`` = 0).
+
+Tunable live via ``CAPTURY_FINGER_OPEN_ANGLE_DEG`` to calibrate per operator.
+"""
+ABILITY_FINGER_CLOSED_ANGLE_DEG = float(os.environ.get("CAPTURY_FINGER_CLOSED_ANGLE_DEG", "95.0"))
+"""Finger bend angle [deg] treated as fully closed (``q1`` = max).
+
+Tunable live via ``CAPTURY_FINGER_CLOSED_ANGLE_DEG``.
+"""
+
+_FINGER_FLEXION_CHAINS = {
+    "index": (OPENXR_INDEX_PROXIMAL, OPENXR_INDEX_TIP),
+    "middle": (OPENXR_MIDDLE_PROXIMAL, OPENXR_MIDDLE_TIP),
+    "ring": (OPENXR_RING_PROXIMAL, OPENXR_RING_TIP),
+    "pinky": (OPENXR_LITTLE_PROXIMAL, OPENXR_LITTLE_TIP),
+}
+
+
+def captury_ability_hand_finger_q1(
+    positions: np.ndarray,
+    valid: np.ndarray,
+    *,
+    q1_max: float = ABILITY_FINGER_Q1_MAX,
+    open_angle_deg: float = ABILITY_FINGER_OPEN_ANGLE_DEG,
+    closed_angle_deg: float = ABILITY_FINGER_CLOSED_ANGLE_DEG,
+) -> dict[str, float]:
+    """Map each Ability Hand finger's bend angle to its driven ``q1`` joint.
+
+    For every non-thumb finger the bend angle is measured at the proximal joint
+    between the proximal->wrist direction and the proximal->fingertip direction:
+    a straight finger is ~180 deg, a curled finger drops toward ~90 deg. The
+    angle is mapped linearly onto ``[0, q1_max]`` (open -> closed) and clamped.
+
+    Unlike DexPilot fingertip-position retargeting, this is stateless and
+    per-finger, so the ulnar fingers (ring/pinky) track open<->closed instead of
+    latching at a limit.
+
+    Args:
+        positions: (26, 3) OpenXR-layout joint positions [m].
+        valid: (26,) validity mask; a finger whose proximal or tip joint is
+            invalid is omitted from the result.
+        q1_max: ``q1`` value for a fully closed finger.
+        open_angle_deg: Bend angle treated as fully open.
+        closed_angle_deg: Bend angle treated as fully closed.
+
+    Returns:
+        ``{finger_name: q1}`` for each finger with valid keypoints (subset of
+        ``index``/``middle``/``ring``/``pinky``).
+    """
+    wrist = positions[OPENXR_WRIST]
+    span = max(open_angle_deg - closed_angle_deg, 1.0e-6)
+    out: dict[str, float] = {}
+    for finger, (proximal, tip) in _FINGER_FLEXION_CHAINS.items():
+        if not (valid[proximal] and valid[tip]):
+            continue
+        to_wrist = wrist - positions[proximal]
+        to_tip = positions[tip] - positions[proximal]
+        n_w = np.linalg.norm(to_wrist)
+        n_t = np.linalg.norm(to_tip)
+        if n_w < 1.0e-6 or n_t < 1.0e-6:
+            continue
+        cos_a = float(np.clip(np.dot(to_wrist, to_tip) / (n_w * n_t), -1.0, 1.0))
+        angle_deg = np.degrees(np.arccos(cos_a))
+        out[finger] = float(np.clip((open_angle_deg - angle_deg) / span, 0.0, 1.0)) * q1_max
+    return out
 
 
 def _wrist_frame_reference_indices(hand_map: CapturyHandJointMap) -> tuple[int, int, int] | None:

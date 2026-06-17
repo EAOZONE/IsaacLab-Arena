@@ -181,6 +181,8 @@ class CapturyTeleopDevice:
         self._skeleton_marker_indices: np.ndarray | None = None
         self._skeleton_key_joints: set[int] = set()
         self._anchor_prim_initial_height: float | None = None
+        self._anchor_prim_initial_yaw: float | None = None
+        self._anchor_torso_world_override: np.ndarray | None = None
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -267,9 +269,13 @@ class CapturyTeleopDevice:
     def reset(self) -> None:
         """Reset hook for device-interface compatibility.
 
-        No pipeline state needs resetting (the retargeters are stateless w.r.t.
-        the environment); environment resets are handled by the teleop loop.
+        Clears cached torso anchor height/yaw so the next :meth:`advance` after
+        an environment reset re-reads the robot spawn pose (important when the
+        anchor prim was briefly invalid or stale on the previous episode).
         """
+        self._anchor_prim_initial_height = None
+        self._anchor_prim_initial_yaw = None
+        self._anchor_torso_world_override = None
 
     def add_callback(self, key: str, func: Callable) -> None:
         """Add a callback function for teleop commands.
@@ -281,7 +287,11 @@ class CapturyTeleopDevice:
         """
         self._callbacks[key] = func
 
-    def advance(self, target_T_world: np.ndarray | torch.Tensor | None = None) -> torch.Tensor | None:
+    def advance(
+        self,
+        target_T_world: np.ndarray | torch.Tensor | None = None,
+        anchor_torso_world: np.ndarray | torch.Tensor | None = None,
+    ) -> torch.Tensor | None:
         """Execute one retargeting step and return the action tensor.
 
         Args:
@@ -289,6 +299,9 @@ class CapturyTeleopDevice:
                 into a target frame. When ``None`` and
                 :attr:`~isaaclab_teleop.IsaacTeleopCfg.target_frame_prim_path`
                 is set, the transform is read from the prim automatically.
+            anchor_torso_world: Optional (4, 4) world transform of the robot
+                torso link. When provided (recommended for Alex), this overrides
+                the USD prim read used for ``world_T_anchor`` placement.
 
         Returns:
             Flattened action tensor on the configured device, or ``None``
@@ -311,22 +324,30 @@ class CapturyTeleopDevice:
         if target_T_world is None and self._cfg.target_frame_prim_path is not None:
             target_T_world = self._get_prim_world_inverse(self._cfg.target_frame_prim_path)
 
-        external_inputs = self._build_external_inputs(target_T_world)
+        if anchor_torso_world is not None and isinstance(anchor_torso_world, torch.Tensor):
+            anchor_torso_world = anchor_torso_world.detach().cpu().numpy()
+        self._anchor_torso_world_override = (
+            np.asarray(anchor_torso_world, dtype=np.float64) if anchor_torso_world is not None else None
+        )
+        try:
+            external_inputs = self._build_external_inputs(target_T_world)
         # Let the pipeline auto-build its per-step ComputeContext (its shape
         # varies across isaacteleop versions). Run-state/reset signalling is not
         # needed here: SE3 wrist + dex-hand retargeting do not depend on it, and
         # environment resets are driven separately by the teleop loop.
-        result = self._pipeline.execute_pipeline(external_inputs)
+            result = self._pipeline.execute_pipeline(external_inputs)
 
-        # Joint poses in the simulation world frame, reused for elbow tracking
-        # and the optional skeleton overlay.
-        world_matrices = self._world_joint_matrices()
-        self._update_elbow_directions_world(world_matrices)
-        if self._skeleton_markers is not None:
-            self._update_skeleton_visualization(world_matrices)
+            # Joint poses in the simulation world frame, reused for elbow tracking
+            # and the optional skeleton overlay.
+            world_matrices = self._world_joint_matrices()
+            self._update_elbow_directions_world(world_matrices)
+            if self._skeleton_markers is not None:
+                self._update_skeleton_visualization(world_matrices)
 
-        action_array = result["action"][0]
-        return torch.from_dlpack(action_array).to(dtype=torch.float32, device=self._device)
+            action_array = result["action"][0]
+            return torch.from_dlpack(action_array).to(dtype=torch.float32, device=self._device)
+        finally:
+            self._anchor_torso_world_override = None
 
     def get_elbow_directions_world(self) -> dict[str, np.ndarray | None]:
         """Per-arm shoulder->elbow unit directions in the simulation world frame.
@@ -491,22 +512,44 @@ class CapturyTeleopDevice:
         """
         xr_cfg = self._cfg.xr_cfg
         anchor_pos = np.array([float(p) for p in xr_cfg.anchor_pos], dtype=np.float64)
+        # Yaw the static anchor by the robot's spawn heading so the operator frame
+        # follows the robot's facing. Captured once from the anchor prim (the robot
+        # is fixed-base during teleop, so its base yaw is static) and cached — this
+        # sidesteps the zero-norm quaternions that per-step FOLLOW_PRIM reads of a
+        # physics-driven link can return. Zero yaw (e.g. the microwave scene) leaves
+        # the anchor unchanged; a turned robot (e.g. +90 deg in the fridge kitchen)
+        # rotates the operator/skeleton frame to match.
+        anchor_yaw = 0.0
 
         if self._cfg.captury_torso_tracking:
             anchor_pos = np.zeros(3, dtype=np.float64)
-            if xr_cfg.anchor_prim_path is not None:
+            robot_torso = self._anchor_torso_world_override
+            if robot_torso is None and xr_cfg.anchor_prim_path is not None:
                 robot_torso = self._get_prim_world_matrix(xr_cfg.anchor_prim_path)
-                if robot_torso is not None:
-                    pos = robot_torso[:3, 3].copy()
-                    if xr_cfg.fixed_anchor_height:
-                        if self._anchor_prim_initial_height is None:
-                            self._anchor_prim_initial_height = float(pos[2])
-                        pos[2] = self._anchor_prim_initial_height
-                    anchor_pos = pos
+            if robot_torso is not None:
+                pos = robot_torso[:3, 3].copy()
+                if xr_cfg.fixed_anchor_height:
+                    if self._anchor_prim_initial_height is None:
+                        self._anchor_prim_initial_height = float(pos[2])
+                    pos[2] = self._anchor_prim_initial_height
+                anchor_pos = pos
+                if self._anchor_prim_initial_yaw is None:
+                    rot = robot_torso[:3, :3]
+                    self._anchor_prim_initial_yaw = float(np.arctan2(rot[1, 0], rot[0, 0]))
+                anchor_yaw = self._anchor_prim_initial_yaw
+            elif xr_cfg.anchor_prim_path is not None:
+                logger.warning(
+                    "Captury torso tracking: no torso world transform (prim '%s' unreadable). "
+                    "Pass anchor_torso_world from the embodiment articulation each advance(), "
+                    "e.g. embodiment.get_captury_anchor_torso_world(env). "
+                    "Hand targets fall back to the world origin with zero yaw.",
+                    xr_cfg.anchor_prim_path,
+                )
 
         r_anchor = Rotation.from_quat([float(q) for q in xr_cfg.anchor_rot]).as_matrix()
+        yaw_rot = Rotation.from_euler("z", anchor_yaw).as_matrix()
         mat = np.eye(4, dtype=np.float32)
-        mat[:3, :3] = r_anchor @ _ANCHOR_TO_USD_ROTATION
+        mat[:3, :3] = yaw_rot @ r_anchor @ _ANCHOR_TO_USD_ROTATION
         mat[:3, 3] = anchor_pos.astype(np.float32)
         return mat
 
@@ -620,6 +663,18 @@ class CapturyTeleopDevice:
         func = self._callbacks.get(key)
         if func is not None:
             func()
+
+
+def advance_captury_with_env_anchor(
+    teleop_interface: CapturyTeleopDevice,
+    env: object,
+    embodiment: object | None = None,
+) -> torch.Tensor | None:
+    """Run one Captury step with Alex torso anchoring from articulation state."""
+    anchor_torso_world = None
+    if embodiment is not None and hasattr(embodiment, "get_captury_anchor_torso_world"):
+        anchor_torso_world = embodiment.get_captury_anchor_torso_world(env)
+    return teleop_interface.advance(anchor_torso_world=anchor_torso_world)
 
 
 def create_captury_teleop_device(

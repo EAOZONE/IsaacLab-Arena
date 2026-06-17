@@ -805,6 +805,19 @@ def _configure_teleop_fixed_base(robot_cfg: ArticulationCfg) -> None:
     robot_cfg.spawn.fix_base = True
 
 
+# Teleop arm-tracking PD gains (teleop only; policy/training use
+# ``_configure_teleop_arm_actuators`` is bypassed in favor of
+# ``_configure_policy_arm_actuators``). The IK already commands the full wrist
+# error each step (gain 1.0), so remaining "arm trails my hand" lag is the PD
+# joints physically converging to the IK solution: higher stiffness raises the
+# tracking bandwidth (and reduces the over-damping from the fixed damping), so
+# the arm catches the operator faster. Tunable live via env vars to find the
+# snappiest stable value for a given rig; push stiffness up for less lag, raise
+# damping if it starts to jitter/oscillate.
+ALEX_TELEOP_ARM_STIFFNESS = float(os.environ.get("ALEX_TELEOP_ARM_STIFFNESS", "6000.0"))
+ALEX_TELEOP_ARM_DAMPING = float(os.environ.get("ALEX_TELEOP_ARM_DAMPING", "100.0"))
+
+
 def _configure_teleop_arm_actuators(robot_cfg: ArticulationCfg, include_wrists: bool) -> None:
     joint_expr = (
         [".*SHOULDER.*", ".*ELBOW.*", ".*WRIST.*", ".*GRIPPER.*"]
@@ -815,8 +828,8 @@ def _configure_teleop_arm_actuators(robot_cfg: ArticulationCfg, include_wrists: 
         joint_names_expr=joint_expr,
         effort_limit=torch.inf,
         velocity_limit=torch.inf,
-        stiffness=3000.0,
-        damping=100.0,
+        stiffness=ALEX_TELEOP_ARM_STIFFNESS,
+        damping=ALEX_TELEOP_ARM_DAMPING,
         armature=0.0,
     )
 
@@ -941,10 +954,12 @@ _ZED_X_MINI_PINHOLE_SPAWN = sim_utils.PinholeCameraCfg.from_intrinsic_matrix(
     clipping_range=(0.1, 10.0),
 )
 
-# After URDF import robot links live under ``Robot/Geometry/<LINK_NAME>``.
-# OpenXR anchoring follows the torso prim for XR view sync.  Wrist targets stay in
-# world frame for Pink IK (which rebases to pelvis internally).
+# OpenXR anchoring nominally follows ``TORSO_LINK`` under ``Robot/Geometry/``.
+# Those link prims are instanced mesh payloads; Fabric world-matrix reads on them
+# often fail, so Captury teleop uses :meth:`AlexTeleopEmbodimentMixin.get_captury_anchor_torso_world`
+# (articulation ``body_pos_w`` / ``body_quat_w``) instead of this USD path.
 _ALEX_XR_ANCHOR_TORSO_PRIM_PATH = "/World/envs/env_0/Robot/Geometry/TORSO_LINK"
+_ALEX_CAPTURY_ANCHOR_BODY_NAME = "TORSO_LINK"
 
 
 # Teleop-only elbow tracking (see CapturyTeleopDevice). The elbow IK targets the
@@ -1190,6 +1205,34 @@ class AlexTeleopEmbodimentMixin:
 
     def reset_teleop_action_warmup(self) -> None:
         self._teleop_warmup_steps_remaining = 0
+
+    def get_captury_anchor_torso_world(self, env: ManagerBasedEnv) -> np.ndarray | None:
+        """Return ``TORSO_LINK`` world transform for Captury torso anchoring.
+
+        Alex link USD prims under ``Robot/Geometry/`` are instanced geometry;
+        :meth:`~isaaclab_arena.teleop.captury.captury_teleop_device.CapturyTeleopDevice._get_prim_world_matrix`
+        often cannot read them.  The articulation body state is reliable each step.
+        """
+        from scipy.spatial.transform import Rotation
+
+        try:
+            robot = env.scene["robot"]
+            torso_ids, _ = robot.find_bodies([_ALEX_CAPTURY_ANCHOR_BODY_NAME])
+            torso_idx = int(torso_ids[0])
+        except Exception:
+            return None
+
+        pos = wp.to_torch(robot.data.body_pos_w)[0, torso_idx].detach().cpu().numpy().astype(np.float64)
+        quat_xyzw = wp.to_torch(robot.data.body_quat_w)[0, torso_idx].detach().cpu().numpy().astype(np.float64)
+        if not np.isfinite(pos).all() or not np.isfinite(quat_xyzw).all():
+            return None
+        if float(np.linalg.norm(quat_xyzw)) < 1e-6:
+            return None
+
+        mat = np.eye(4, dtype=np.float64)
+        mat[:3, :3] = Rotation.from_quat(quat_xyzw).as_matrix()
+        mat[:3, 3] = pos
+        return mat
 
     def _assign_xr_cfg(self) -> None:
         self.xr = copy.deepcopy(_ALEX_XR_CFG)

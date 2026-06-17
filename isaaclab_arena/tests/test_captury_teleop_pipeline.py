@@ -25,6 +25,69 @@ from isaaclab_arena.tests.utils.subprocess import run_simulation_app_function
 HEADLESS = True
 
 
+def _make_openxr_hand_positions(curl: float) -> tuple[np.ndarray, np.ndarray]:
+    """Build (positions, valid) for a right hand at the given curl (0=open, 1=fist).
+
+    Each finger's tip extends straight out from the wrist->proximal line when
+    open (proximal bend angle ~180 deg) and folds back toward the wrist/palm
+    when closed (angle ~90 deg), sweeping the range the flexion mapping reads.
+    """
+    from isaaclab_arena.teleop.captury import captury_skeleton as cs
+
+    pos = np.zeros((cs.NUM_OPENXR_HAND_JOINTS, 3), dtype=np.float32)
+    valid = np.zeros(cs.NUM_OPENXR_HAND_JOINTS, dtype=np.uint8)
+    pos[cs.OPENXR_WRIST] = (0.0, 0.0, 0.0)
+    valid[cs.OPENXR_WRIST] = 1
+    chains = {
+        (cs.OPENXR_INDEX_PROXIMAL, cs.OPENXR_INDEX_TIP): 0.03,
+        (cs.OPENXR_MIDDLE_PROXIMAL, cs.OPENXR_MIDDLE_TIP): 0.01,
+        (cs.OPENXR_RING_PROXIMAL, cs.OPENXR_RING_TIP): -0.01,
+        (cs.OPENXR_LITTLE_PROXIMAL, cs.OPENXR_LITTLE_TIP): -0.03,
+    }
+    for (prox, tip), x in chains.items():
+        proximal = np.array([x, 0.05, 0.0])
+        pos[prox] = proximal
+        out_dir = proximal / np.linalg.norm(proximal)  # straight continuation (open)
+        fold_dir = np.array([0.0, -0.6, -0.8])  # back toward wrist and into the palm (closed)
+        tip_dir = (1.0 - curl) * out_dir + curl * fold_dir
+        tip_dir = tip_dir / np.linalg.norm(tip_dir)
+        pos[tip] = proximal + 0.09 * tip_dir
+        valid[prox] = 1
+        valid[tip] = 1
+    return pos, valid
+
+
+def test_captury_finger_flexion_tracks_open_and_closed():
+    """Bend-angle flexion maps every finger (incl. ring/pinky) open->0, fist->max.
+
+    DexPilot fingertip retargeting latches the ulnar fingers at a limit on
+    markerless data; the direct flexion mapping must instead move all four
+    fingers monotonically from open to closed.
+    """
+    from isaaclab_arena.teleop.captury.captury_skeleton import (
+        ABILITY_FINGER_Q1_MAX,
+        OPENXR_RING_TIP,
+        captury_ability_hand_finger_q1,
+    )
+
+    open_pos, valid = _make_openxr_hand_positions(curl=0.0)
+    closed_pos, _ = _make_openxr_hand_positions(curl=1.0)
+
+    q_open = captury_ability_hand_finger_q1(open_pos, valid)
+    q_closed = captury_ability_hand_finger_q1(closed_pos, valid)
+
+    for finger in ("index", "middle", "ring", "pinky"):
+        assert q_open[finger] < 0.3, f"{finger} should be near-open, got {q_open[finger]:.2f}"
+        assert q_closed[finger] > 1.0, f"{finger} should curl when closed, got {q_closed[finger]:.2f}"
+        assert q_closed[finger] > q_open[finger]
+        assert 0.0 <= q_open[finger] <= ABILITY_FINGER_Q1_MAX
+        assert 0.0 <= q_closed[finger] <= ABILITY_FINGER_Q1_MAX
+
+    # Missing keypoints -> that finger is simply absent (caller keeps the dex value).
+    valid[OPENXR_RING_TIP] = 0
+    assert "ring" not in captury_ability_hand_finger_q1(open_pos, valid)
+
+
 class _FakeCapturyPoseProvider:
     """Pose provider returning a fixed standard-skeleton pose."""
 
@@ -195,3 +258,60 @@ def _test_openxr_ability_hand_has_no_elbow_tasks(simulation_app):
 def test_openxr_ability_hand_has_no_elbow_tasks():
     result = run_simulation_app_function(_test_openxr_ability_hand_has_no_elbow_tasks, headless=HEADLESS)
     assert result
+
+
+def _make_torso_world_matrix(position_xyz: tuple[float, float, float], yaw_deg: float) -> np.ndarray:
+    """Build a (4, 4) torso world matrix with Z-up yaw only."""
+    from scipy.spatial.transform import Rotation
+
+    mat = np.eye(4, dtype=np.float64)
+    mat[:3, :3] = Rotation.from_euler("z", np.radians(yaw_deg)).as_matrix()
+    mat[:3, 3] = position_xyz
+    return mat
+
+
+def test_captury_world_T_anchor_follows_robot_spawn_yaw():
+    """Anchor rotation must include robot spawn yaw (fridge +90 deg vs microwave 0 deg).
+
+    Captury expresses skeleton joints relative to the operator torso, then
+    applies ``world_T_anchor`` to place them in the simulation.  When Alex is
+    spawned with a non-zero yaw the anchor rotation must compose that yaw;
+    otherwise the operator frame stays at the static OpenXR calibration and
+    arm targets appear rotated relative to the robot (the fridge-env bug).
+    """
+    from scipy.spatial.transform import Rotation
+
+    from isaaclab_teleop import XrCfg
+
+    from isaaclab_arena.embodiments.alex.alex import _ALEX_XR_ANCHOR_TORSO_PRIM_PATH
+    from isaaclab_arena.teleop.captury.captury_teleop_device import CapturyDeviceCfg, CapturyTeleopDevice
+
+    xr_cfg = XrCfg(
+        anchor_pos=(0.0, 0.0, -1.0),
+        anchor_rot=(0.0, 0.0, -0.70711, 0.70711),
+        anchor_prim_path=_ALEX_XR_ANCHOR_TORSO_PRIM_PATH,
+        fixed_anchor_height=True,
+    )
+    cfg = CapturyDeviceCfg(xr_cfg=xr_cfg, pipeline_builder=lambda _src: None)
+    device = CapturyTeleopDevice(cfg)
+
+    microwave_torso = _make_torso_world_matrix((-0.40, -0.1, 0.93), yaw_deg=0.0)
+    fridge_torso = _make_torso_world_matrix((3.943, -1.0, 0.995), yaw_deg=90.0)
+    torso_reads = iter([microwave_torso, fridge_torso])
+
+    def _read_torso(_prim_path: str) -> np.ndarray:
+        return next(torso_reads)
+
+    device._get_prim_world_matrix = staticmethod(lambda prim_path: _read_torso(prim_path))
+
+    mw_anchor = device._get_world_T_anchor()
+    device.reset()
+    fr_anchor = device._get_world_T_anchor()
+
+    np.testing.assert_allclose(mw_anchor[:3, 3], microwave_torso[:3, 3], rtol=1e-5)
+    np.testing.assert_allclose(fr_anchor[:3, 3], fridge_torso[:3, 3], rtol=1e-5)
+
+    mw_yaw = Rotation.from_matrix(mw_anchor[:3, :3]).as_euler("xyz")[2]
+    fr_yaw = Rotation.from_matrix(fr_anchor[:3, :3]).as_euler("xyz")[2]
+    yaw_delta_deg = np.degrees(fr_yaw - mw_yaw)
+    assert abs(yaw_delta_deg - 90.0) < 1.0, f"Expected ~90 deg yaw delta, got {yaw_delta_deg:.2f}"

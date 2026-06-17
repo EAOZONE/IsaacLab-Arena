@@ -133,7 +133,7 @@ def _build_alex_pipeline(hands_source=None):
     return OutputCombiner({"action": connected_reorderer.output("output")})
 
 
-def _build_alex_ability_hands_pipeline(robot_version: str = "V1", hands_source=None):
+def _build_alex_ability_hands_pipeline(robot_version: str = "V1", hands_source=None, use_captury_finger_flexion=False):
     """Build IsaacTeleop pipeline for Alex with PINK IK wrists and dex hand retargeting.
 
     Output tensor layout: [left_wrist(7), right_wrist(7), hand_joints(20)].
@@ -142,6 +142,11 @@ def _build_alex_ability_hands_pipeline(robot_version: str = "V1", hands_source=N
         robot_version: Alex robot version ("V1" or "V2").
         hands_source: Optional hands source node (e.g. a Captury source).
             Defaults to the OpenXR DeviceIO ``HandsSource``.
+        use_captury_finger_flexion: When ``True`` (Captury path only), the four
+            finger ``q1`` joints are computed by direct bend-angle flexion from
+            the hand source instead of DexPilot (whose fingertip optimization is
+            bistable for the ring/pinky on markerless data); the thumb still
+            comes from DexPilot. Leaves the OpenXR path on pure DexPilot.
     """
     from isaacteleop.retargeters import (
         DexHandRetargeter,
@@ -226,13 +231,36 @@ def _build_alex_ability_hands_pipeline(robot_version: str = "V1", hands_source=N
     )
     connected_right_dex = right_dex.connect({HandsSource.RIGHT: hands.output(HandsSource.RIGHT)})
 
+    # Independent-joint source feeding the joint expander. By default this is the
+    # raw DexPilot output; on the Captury path the four finger q1 joints are
+    # replaced with direct bend-angle flexion (DexPilot is bistable for the
+    # ring/pinky on markerless data) while the thumb keeps its DexPilot value.
+    left_hand_joints = connected_left_dex.output("hand_joints")
+    right_hand_joints = connected_right_dex.output("hand_joints")
+    if use_captury_finger_flexion:
+        from isaaclab_arena.teleop.captury.captury_finger_flexion_retargeter import CapturyFingerFlexionRetargeter
+
+        left_flex = CapturyFingerFlexionRetargeter(left_independent_joint_names, "left", name="left_hand_flexion")
+        connected_left_flex = left_flex.connect({
+            "hand_left": hands.output(HandsSource.LEFT),
+            CapturyFingerFlexionRetargeter.DEX_INPUT: left_hand_joints,
+        })
+        left_hand_joints = connected_left_flex.output("hand_joints")
+
+        right_flex = CapturyFingerFlexionRetargeter(right_independent_joint_names, "right", name="right_hand_flexion")
+        connected_right_flex = right_flex.connect({
+            "hand_right": hands.output(HandsSource.RIGHT),
+            CapturyFingerFlexionRetargeter.DEX_INPUT: right_hand_joints,
+        })
+        right_hand_joints = connected_right_flex.output("hand_joints")
+
     left_expand = AbilityHandJointExpandRetargeter(
         left_independent_joint_names,
         left_full_joint_names,
         name="left_hand_expand",
     )
     connected_left_expand = left_expand.connect({
-        "hand_joints": connected_left_dex.output("hand_joints"),
+        "hand_joints": left_hand_joints,
     })
 
     right_expand = AbilityHandJointExpandRetargeter(
@@ -241,7 +269,7 @@ def _build_alex_ability_hands_pipeline(robot_version: str = "V1", hands_source=N
         name="right_hand_expand",
     )
     connected_right_expand = right_expand.connect({
-        "hand_joints": connected_right_dex.output("hand_joints"),
+        "hand_joints": right_hand_joints,
     })
 
     reorderer = TensorReorderer(
@@ -352,7 +380,9 @@ class AlexAbilityHandCapturyRetargeter(RetargetterBase):
             embodiment.enable_teleop_elbow_tracking()
         if hasattr(embodiment, "enable_captury_teleop_responsiveness"):
             embodiment.enable_captury_teleop_responsiveness()
-        return lambda hands_source: _build_alex_ability_hands_pipeline(hands_source=hands_source)[0]
+        return lambda hands_source: _build_alex_ability_hands_pipeline(
+            hands_source=hands_source, use_captury_finger_flexion=True
+        )[0]
 
 
 @register_retargeter
@@ -375,7 +405,9 @@ class AlexV2AbilityHandCapturyRetargeter(AlexAbilityHandCapturyRetargeter):
             embodiment.enable_teleop_elbow_tracking()
         if hasattr(embodiment, "enable_captury_teleop_responsiveness"):
             embodiment.enable_captury_teleop_responsiveness()
-        return lambda hands_source: _build_alex_ability_hands_pipeline(ALEX_V2, hands_source=hands_source)[0]
+        return lambda hands_source: _build_alex_ability_hands_pipeline(
+            ALEX_V2, hands_source=hands_source, use_captury_finger_flexion=True
+        )[0]
 
 
 @register_retargeter

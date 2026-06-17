@@ -5,6 +5,7 @@
       <sourceFolder url="file://$MODULE_DIR$/submodules/IsaacLab/source/isaaclab/isaaclab/utils" isTestSource="false" />
       <sourceFolder url="file://$MODULE_DIR$/submodules/IsaacLab/source/isaaclab_tasks" isTestSource="false" />
       <sourceFolder url="file://$MODULE_DIR$/submodules/IsaacLab/source/isaaclab_teleop" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/submodules/IsaacLab/source/isaaclab_mimic" isTestSource="false" />
       <excludeFolder url="file://$MODULE_DIR$/.venv" />
       <excludeFolder url="file://$MODULE_DIR$/submodules/Isaac-GR00T/.venv" />
     </content>

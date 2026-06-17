@@ -4,6 +4,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
+import os
 from typing import TYPE_CHECKING, Any
 
 import isaaclab.sim as sim_utils
@@ -186,6 +187,46 @@ class Microwave(LibraryObject, Openable):
     def __init__(
         self, instance_name: str | None = None, prim_path: str | None = None, initial_pose: Pose | None = None
     ):
+        super().__init__(
+            instance_name=instance_name,
+            prim_path=prim_path,
+            initial_pose=initial_pose,
+            openable_joint_name=self.openable_joint_name,
+            openable_threshold=self.openable_threshold,
+        )
+
+
+@register_asset
+class WsAlexDoor(LibraryObject, Openable):
+    """The ws_alex (IHMC) hinged door, rebuilt as a single-DOF articulation.
+
+    Geometry is reproduced from the measured ``door_panel.glb`` (0.9144 x 0.034 x 2.033 m)
+    by ``isaaclab_arena/scripts/doorman/build_ws_alex_door.py``; the generated USD lives
+    under ``assets/doorman/usd`` and is *not* committed (regenerate with that script, or
+    override the path with ``ARENA_WS_ALEX_DOOR_USD``).
+    """
+
+    name = "ws_alex_door"
+    tags = ["object", "openable"]
+    usd_path = os.environ.get(
+        "ARENA_WS_ALEX_DOOR_USD",
+        os.path.join(os.path.dirname(__file__), "doorman", "usd", "ws_alex_door", "ws_alex_door.usda"),
+    )
+    object_type = ObjectType.ARTICULATION
+
+    # Free-swinging revolute hinge built by the doorman script.
+    openable_joint_name = "hinge"
+    openable_threshold = 0.5
+
+    def __init__(
+        self, instance_name: str | None = None, prim_path: str | None = None, initial_pose: Pose | None = None
+    ):
+        assert os.path.exists(self.usd_path), (
+            f"ws_alex_door USD not found at {self.usd_path}.\n"
+            "Build it inside the container with:\n"
+            "  /isaac-sim/python.sh isaaclab_arena/scripts/doorman/build_ws_alex_door.py --headless\n"
+            "or point ARENA_WS_ALEX_DOOR_USD at an existing build."
+        )
         super().__init__(
             instance_name=instance_name,
             prim_path=prim_path,
