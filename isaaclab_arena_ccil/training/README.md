@@ -8,9 +8,12 @@ incompatible with Arena's Isaac Sim interpreter (py3.12/3.13). So training/expor
 separate offline env (e.g. on `gpu2`), and only a dependency-free TorchScript artifact crosses
 into Arena. Inference in Arena is pure PyTorch — no d3rlpy, no server.
 
-State/action spaces match the GR00T LeRobot pipeline:
-`robot_joint_pos` (49) in, `processed_actions` (34) out — so the policy output is directly
-env-applicable with **no joint remapping**.
+State/action spaces: `robot_joint_pos` (49) in, raw Pink IK `actions` (34) out — left/right
+EE target poses (pos 3 + quat 4 each = 14) followed by 20 ability-hand finger joints. The
+policy output is fed to an **IK-in-the-loop embodiment** (`alex_v2_ability_hands`), which
+resolves the EE targets to a whole-body solution — so the same policy transfers to the real
+robot's IK streamer. (To train the legacy direct-joint policy instead, pass
+`--action_key processed_actions` to the converter and evaluate with `alex_v2_ability_hands_joint_pos`.)
 
 ---
 
@@ -105,14 +108,15 @@ args must come **before** `alex_open_microwave`, and only env-specific args (`--
   --meta_path /datasets/alex_microwave/ccil/ccil_bc_meta.json \
   --policy_device cuda \
   alex_open_microwave \
-  --embodiment alex_v2_ability_hands_joint_pos
+  --embodiment alex_v2_ability_hands
 ```
 
-Use ``alex_v2_ability_hands_joint_pos`` (not ``alex_v2_ability_hands``): the CCIL policy
-outputs 34-DOF absolute joint positions in the same column order as Pink IK
-``processed_actions`` (articulation index order via ``preserve_order=False`` on the
-joint-pos action term). The IK embodiment interprets the first 14 dims as wrist-pose
-targets, so joint-position policies must use the joint-pos embodiment.
+Use ``alex_v2_ability_hands`` (the Pink IK embodiment): the CCIL policy now outputs the raw
+34-dim Pink IK action — the first 14 dims are left/right EE target poses (pos + quat) and the
+last 20 are ability-hand finger joints. The IK embodiment resolves those EE targets to a
+whole-body joint solution each step. (A policy trained on ``processed_actions`` instead would
+require ``alex_v2_ability_hands_joint_pos``, which replays the 14 wrist/arm dims as direct
+joint targets.)
 
 The `OpenDoorTask` success term reports the success rate.
 

@@ -21,6 +21,18 @@ RANDOMIZATION_HALF_RANGE_X_M = 0.03
 RANDOMIZATION_HALF_RANGE_Y_M = 0.01
 RANDOMIZATION_HALF_RANGE_Z_M = 0.0
 
+# High-friction contact material for the ability-hand fingers. Default finger
+# friction lets graspable objects slip out of the grip during teleop; binding a
+# high-friction material (combine_mode="max") onto the finger collision prims
+# fixes this. Mirrors the G1 static pick-and-place finger-friction setup.
+ABILITY_HAND_FINGER_FRICTION_MATERIAL_PATH = "/World/Materials/alex_ability_hand_high_friction_fingers"
+ABILITY_HAND_FINGER_STATIC_FRICTION = 6.0
+ABILITY_HAND_FINGER_DYNAMIC_FRICTION = 5.0
+# Substrings matched (case-insensitive) against finger/tactile-pad collision prim
+# paths under the robot: phalanx links (index/middle/ring/pinky/thumb) and the
+# Ability Hand force-sensor (fsr) contact pads.
+ABILITY_HAND_FINGER_PRIM_NAME_MARKERS = ("index", "middle", "ring", "pinky", "thumb", "fsr")
+
 
 @register_environment
 class AlexPutAndCloseDoorEnvironment(ExampleEnvironmentBase):
@@ -127,6 +139,17 @@ class AlexPutAndCloseDoorEnvironment(ExampleEnvironmentBase):
         # Alex's ability-hand embodiment uses fixed stereo ZED cameras on HEAD_LINK
         # and does not accept a camera_offset (unlike the GR1T2 embodiment).
         embodiment = self.asset_registry.get_asset_by_name(args_cli.embodiment)(enable_cameras=args_cli.enable_cameras)
+
+        # Boost ability-hand finger friction so the pickup object does not slip out of
+        # the grip during teleop / datagen. No-op for embodiments without this method.
+        if hasattr(embodiment, "set_finger_contact_friction"):
+            embodiment.set_finger_contact_friction(
+                material_path=ABILITY_HAND_FINGER_FRICTION_MATERIAL_PATH,
+                static_friction=ABILITY_HAND_FINGER_STATIC_FRICTION,
+                dynamic_friction=ABILITY_HAND_FINGER_DYNAMIC_FRICTION,
+                prim_name_markers=ABILITY_HAND_FINGER_PRIM_NAME_MARKERS,
+            )
+
         kitchen_background = self.asset_registry.get_asset_by_name("lightwheel_robocasa_kitchen")(
             style_id=args_cli.kitchen_style
         )

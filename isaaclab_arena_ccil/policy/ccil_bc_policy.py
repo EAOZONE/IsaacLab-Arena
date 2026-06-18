@@ -18,8 +18,11 @@ Two artifact formats are supported (resolved automatically):
    ``state_dict`` plus ``meta.json`` describing ``hidden_units``/``activation`` and the
    observation (standard) and action (min-max) normalization, reconstructed here.
 
-Observation/action spaces match the GR00T LeRobot pipeline (``robot_joint_pos`` 49-dof in,
-``processed_actions`` 34-dof out), so the action is directly env-applicable — no joint remap.
+Observation is ``robot_joint_pos`` (49-dof). The action is the 34-dim raw Pink IK action —
+left/right EE target poses (pos 3 + quat 4 each = 14) followed by 20 ability-hand finger
+joints — so it must be applied through an IK-in-the-loop embodiment (``alex_ability_hands``)
+that resolves the EE targets to a whole-body solution, not the direct joint-position
+embodiment. (Train on ``processed_actions`` instead for the legacy direct-joint path.)
 """
 
 from __future__ import annotations

@@ -27,7 +27,11 @@ ACT_DIM = 34
 
 
 def _write_synthetic_hdf5(path: str, num_demos: int = 3) -> None:
-    """Write a minimal Arena-style HDF5 with obs/robot_joint_pos and processed_actions."""
+    """Write a minimal Arena-style HDF5 with obs/robot_joint_pos plus the two action streams.
+
+    Real recordings contain both the raw Pink IK ``actions`` (EE poses + fingers, the
+    default for training) and the post-IK ``processed_actions`` (joint targets).
+    """
     rng = np.random.default_rng(0)
     with h5py.File(path, "w") as f:
         data = f.create_group("data")
@@ -36,6 +40,7 @@ def _write_synthetic_hdf5(path: str, num_demos: int = 3) -> None:
             g = data.create_group(f"demo_{i}")
             obs = g.create_group("obs")
             obs.create_dataset("robot_joint_pos", data=rng.standard_normal((t, OBS_DIM)).astype(np.float32))
+            g.create_dataset("actions", data=rng.standard_normal((t, ACT_DIM)).astype(np.float32))
             g.create_dataset("processed_actions", data=rng.standard_normal((t, ACT_DIM)).astype(np.float32))
 
 
@@ -48,7 +53,7 @@ def test_converter_shapes(tmp_path):
     pkl = str(tmp_path / "ccil" / "demo.pkl")
     _write_synthetic_hdf5(hdf5, num_demos=4)
 
-    trajs = convert(hdf5, pkl, state_key="robot_joint_pos", action_key="processed_actions")
+    trajs = convert(hdf5, pkl, state_key="robot_joint_pos", action_key="actions")
     assert len(trajs) == 4
     with open(pkl, "rb") as f:
         loaded = pickle.load(f)

@@ -11,6 +11,7 @@ import numpy as np
 import os
 import re
 import torch
+import warnings
 import warp as wp
 import xml.etree.ElementTree as ET
 from collections.abc import Sequence
@@ -1437,6 +1438,8 @@ class AlexEventCfg:
 
     sync_zed_cameras_reset: EventTerm | None = None
 
+    apply_high_friction_to_ability_hand_fingers: EventTerm | None = None
+
 
 def sync_alex_zed_cameras(env: ManagerBasedEnv, env_ids: torch.Tensor) -> None:
     """Track ZED cameras to the kinematic HEAD_LINK body each step."""
@@ -1463,6 +1466,67 @@ def sync_alex_zed_cameras(env: ManagerBasedEnv, env_ids: torch.Tensor) -> None:
         )
         cam_pos, cam_quat = PoseUtils.combine_frame_transforms(head_pos, head_quat, offset_pos, offset_quat)
         env.scene[cam_name].set_world_poses(cam_pos, cam_quat, env_ids, convention="opengl")
+
+
+def apply_high_friction_to_ability_hand_fingers(
+    env: ManagerBasedEnv,
+    env_ids: torch.Tensor,
+    material_path: str,
+    static_friction: float,
+    dynamic_friction: float,
+    prim_name_markers: Sequence[str],
+) -> None:
+    """Bind a high-friction contact material to Ability Hand finger collision prims.
+
+    Default friction on the finger collision shapes is low enough that graspable
+    objects slip out of the grip during teleop. This binds a high-friction
+    material (with ``friction_combine_mode="max"``, so it dominates regardless of
+    the object's material) onto every robot collision prim whose path contains one
+    of ``prim_name_markers``. Mirrors the G1 ``apply_high_friction_to_g1_fingers``
+    event.
+    """
+    del env_ids
+    from isaaclab.sim import bind_physics_material
+    from isaaclab.sim.spawners.materials import RigidBodyMaterialCfg
+    from pxr import UsdPhysics, UsdShade
+
+    stage = env.sim.stage
+    material_cfg = RigidBodyMaterialCfg(
+        static_friction=static_friction,
+        dynamic_friction=dynamic_friction,
+        friction_combine_mode="max",
+    )
+    material_cfg.func(material_path, material_cfg)
+
+    bound_count = 0
+    for env_prim_path in env.scene.env_prim_paths:
+        robot_prim_path = f"{env_prim_path}/Robot"
+        for prim in stage.Traverse():
+            prim_path = str(prim.GetPath())
+            if not prim_path.startswith(robot_prim_path):
+                continue
+            prim_path_lower = prim_path.lower()
+            if not any(marker in prim_path_lower for marker in prim_name_markers):
+                continue
+            applied_schemas = set(prim.GetAppliedSchemas())
+            has_collision_api = prim.HasAPI(UsdPhysics.CollisionAPI) or "PhysicsCollisionAPI" in applied_schemas
+            if not has_collision_api:
+                continue
+
+            bind_physics_material(prim_path, material_path, stage=stage)
+            # bind_physics_material is decorated with apply_nested and returns None, so
+            # verify the resulting direct physics material binding explicitly.
+            material_binding_api = UsdShade.MaterialBindingAPI(prim)
+            direct_binding = material_binding_api.GetDirectBinding("physics")
+            if str(direct_binding.GetMaterialPath()) == material_path:
+                bound_count += 1
+
+    if bound_count == 0:
+        warnings.warn(
+            "apply_high_friction_to_ability_hand_fingers: no Ability Hand finger collision prims were found; "
+            "hand friction may be unchanged.",
+            stacklevel=1,
+        )
 
 
 class AlexMimicEnv(ManagerBasedRLMimicEnv):
@@ -1684,6 +1748,33 @@ class AlexAbilityHandEmbodiment(AlexTeleopEmbodimentMixin, EmbodimentBase):
         self.camera_config.__post_init__()
 
         self._assign_xr_cfg()
+
+    def set_finger_contact_friction(
+        self,
+        *,
+        material_path: str,
+        static_friction: float,
+        dynamic_friction: float,
+        prim_name_markers: Sequence[str],
+    ) -> None:
+        """Configure a prestartup event that binds high contact friction to ability-hand fingers.
+
+        Boosts grip friction so graspable objects do not slip out during teleop /
+        datagen. Call at build time before the environment is constructed.
+        """
+        assert self.event_config is not None and self.event_config is not MISSING, (
+            "event_config must be populated before calling `set_finger_contact_friction`."
+        )
+        self.event_config.apply_high_friction_to_ability_hand_fingers = EventTerm(
+            func=apply_high_friction_to_ability_hand_fingers,
+            mode="prestartup",
+            params={
+                "material_path": material_path,
+                "static_friction": static_friction,
+                "dynamic_friction": dynamic_friction,
+                "prim_name_markers": tuple(prim_name_markers),
+            },
+        )
 
     def stabilize_teleop_action(self, env: ManagerBasedEnv, action: torch.Tensor) -> torch.Tensor:
         """Clamp ability-hand wrist teleop targets before Pink IK."""

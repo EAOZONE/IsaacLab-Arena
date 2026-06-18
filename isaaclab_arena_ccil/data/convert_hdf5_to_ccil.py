@@ -10,14 +10,20 @@ trajectory dicts, each ``{"observations": (T, obs_dim), "actions": (T, act_dim)}
 2D float arrays (observations and actions are the *same* length T; CCIL slices the
 last transition off internally).
 
-For Alex_V2 open-microwave we use the same state/action fields as the GR00T LeRobot
-pipeline so the action space is identical:
+For Alex ability-hands open-microwave the action space is the *raw* Pink IK action —
+end-effector target poses plus finger joints — rather than the post-IK joint targets:
 
-* observations := ``obs/robot_joint_pos``      (49 dof, ``alex_49dof_joint_space.yaml``)
-* actions      := ``processed_actions``        (34 dof, ``alex_34dof_action_joint_space.yaml``)
+* observations := ``obs/robot_joint_pos``  (49 dof, ``alex_49dof_joint_space.yaml``)
+* actions      := ``actions``              (34 dim: left EE pose [pos 3 + quat 4],
+                                            right EE pose [pos 3 + quat 4], then 20
+                                            ability-hand finger joints)
 
-``processed_actions`` are exactly what ``env.step`` consumed, so a policy trained on
-them is directly env-applicable with no joint remapping.
+``actions`` is the raw action ``env.step`` *received* (the EE targets that Pink IK / the
+real-robot IK streamer then resolves to a whole-body joint solution). A policy trained on
+this stream must be applied through an IK-in-the-loop embodiment (``alex_ability_hands``),
+**not** the direct joint-position embodiment ``alex_ability_hands_joint_pos`` — the latter
+expects ``processed_actions`` (post-IK joint targets). The finger block (last 20 dims) is
+identical in both streams; only the first 14 dims change (EE poses vs. arm/wrist joints).
 
 This script depends only on ``h5py`` + ``numpy`` and runs in the Arena container.
 
@@ -36,9 +42,10 @@ import numpy as np
 import os
 import pickle
 
-# Default HDF5 fields, matching the GR00T LeRobot config for Alex open-microwave.
+# Default HDF5 fields. ``actions`` is the raw Pink IK action (EE target poses + finger
+# joints); pass ``--action_key processed_actions`` to train on post-IK joint targets instead.
 DEFAULT_STATE_KEY = "robot_joint_pos"
-DEFAULT_ACTION_KEY = "processed_actions"
+DEFAULT_ACTION_KEY = "actions"
 
 
 def _read_trajectory(demo: h5py.Group, state_key: str, action_key: str) -> dict[str, np.ndarray]:
