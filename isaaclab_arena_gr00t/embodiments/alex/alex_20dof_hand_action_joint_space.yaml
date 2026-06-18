@@ -1,0 +1,34 @@
+# Copyright (c) 2025-2026, The Isaac Lab Arena Project Developers (https://github.com/isaac-sim/IsaacLab-Arena/blob/main/CONTRIBUTORS.md).
+# All rights reserved.
+#
+# SPDX-License-Identifier: Apache-2.0
+
+# Column order for the FINGER block of the raw Pink IK ``actions`` stream — i.e.
+# ``actions[:, 14:34]`` after the 14 EE-pose columns. Unlike ``processed_actions`` (which
+# is in articulation index order), the raw ``actions`` hand block follows the teleop
+# ``hand_joint_names`` order (``ABILITY_HAND_TELEOP_JOINT_ORDER``) exactly, so these indices
+# are authoritative. Used as ``action_joints_config_path`` together with
+# ``action_joint_slice: [14, 34]`` in the EEF open-microwave config.
+joints:
+  left_ability_hand_index_q1: 0
+  left_ability_hand_middle_q1: 1
+  left_ability_hand_ring_q1: 2
+  left_ability_hand_pinky_q1: 3
+  right_ability_hand_index_q1: 4
+  right_ability_hand_middle_q1: 5
+  right_ability_hand_ring_q1: 6
+  right_ability_hand_pinky_q1: 7
+  left_ability_hand_thumb_q1: 8
+  right_ability_hand_thumb_q1: 9
+  left_ability_hand_index_q2: 10
+  left_ability_hand_middle_q2: 11
+  left_ability_hand_ring_q2: 12
+  left_ability_hand_pinky_q2: 13
+  right_ability_hand_index_q2: 14
+  right_ability_hand_middle_q2: 15
+  right_ability_hand_ring_q2: 16
+  right_ability_hand_pinky_q2: 17
+  left_ability_hand_thumb_q2: 18
+  right_ability_hand_thumb_q2: 19
+
+total_joints: 20

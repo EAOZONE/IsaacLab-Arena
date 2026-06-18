@@ -37,17 +37,19 @@
         }
     },
     "action": {
-        "left_arm": {
+        "left_wrist_pose": {
             "start": 0,
-            "end": 7
+            "end": 7,
+            "original_key": "action.eef_pose"
         },
-        "right_arm": {
+        "right_wrist_pose": {
             "start": 7,
-            "end": 14
+            "end": 14,
+            "original_key": "action.eef_pose"
         },
         "hands": {
-            "start": 14,
-            "end": 34
+            "start": 0,
+            "end": 20
         }
     },
     "video": {

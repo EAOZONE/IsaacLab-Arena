@@ -393,6 +393,11 @@ def convert_trajectory_to_df(
         elif key == "action":
             # NOTE(xinjieyao, 2025-09-25): remove the last idle action due to Lab reports actions
             joints = joints[:-1]
+            # When the action stream packs EE poses and joints together (raw Pink IK `actions`),
+            # only the finger columns are joints; restrict the joint-remap path to that slice.
+            if config.action_joint_slice is not None:
+                start, end = config.action_joint_slice
+                joints = joints[:, start:end]
             input_joints_config = action_joints_config
         else:
             raise ValueError(f"Unknown key: {key}")
@@ -458,6 +463,17 @@ def convert_trajectory_to_df(
             assert f"{key}_eef_pose" in config.lerobot_keys, f"{key}_eef_pose not in config.lerobot_keys"
             lerobot_key_name = config.lerobot_keys[f"{key}_eef_pose"]
             data[lerobot_key_name] = [row for row in eef_pose]
+
+    """Get eef pose action from a column slice of the packed action (optional)"""
+
+    if config.action_eef_pose_slice is not None:
+        start, end = config.action_eef_pose_slice
+        # Raw Pink IK `actions` packs [left pos3+quat4, right pos3+quat4, ...]; columns
+        # [start:end] are the bimanual wrist target poses (matches left/right_wrist_pose modality).
+        action_eef = np.asarray(trajectory[config.hdf5_keys["action"]][:-1, start:end], dtype=np.float64)
+        assert action_eef.shape == (length, end - start), f"{action_eef.shape} != ({length}, {end - start})"
+        assert "action_eef_pose" in config.lerobot_keys, "action_eef_pose lerobot key missing for action_eef_pose_slice"
+        data[config.lerobot_keys["action_eef_pose"]] = [row for row in action_eef]
 
     """Get teleop command for action from HDF5 file(optional)"""
 

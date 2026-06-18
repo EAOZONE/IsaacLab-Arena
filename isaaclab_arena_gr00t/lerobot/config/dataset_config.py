@@ -49,6 +49,26 @@ class Gr00tDatasetConfig:
     action_name_sim: str = field(
         default="processed_actions", metadata={"description": "Name of the action in the HDF5 file."}
     )
+    action_eef_pose_slice: list[int] | None = field(
+        default=None,
+        metadata={
+            "description": (
+                "Optional [start, end]. When set, columns [start:end] of action_name_sim are written as the "
+                "action.eef_pose feature (EE wrist target poses) instead of being treated as joints. Used to "
+                "split the packed raw Pink IK `actions` (EE poses + fingers) into pose vs. joint columns."
+            )
+        },
+    )
+    action_joint_slice: list[int] | None = field(
+        default=None,
+        metadata={
+            "description": (
+                "Optional [start, end]. When set, the joint-remap action path consumes only columns [start:end] "
+                "of action_name_sim (e.g. the finger block of the packed `actions`); action_joints_config_path "
+                "must describe exactly those columns."
+            )
+        },
+    )
     pov_cam_name_sim: str = field(
         default="robot_head_cam", metadata={"description": "Name of the POV camera in the HDF5 file."}
     )
@@ -199,6 +219,10 @@ class Gr00tDatasetConfig:
         }
         if "left_eef_pos" in self.hdf5_keys:
             self.lerobot_keys["obs_eef_pose"] = "observation.eef_pose"
+            self.lerobot_keys["action_eef_pose"] = "action.eef_pose"
+        # Packed-action EEF split: the EE wrist poses come from a column slice of action_name_sim
+        # rather than from separate *_eef_pos/*_eef_quat datasets.
+        if self.action_eef_pose_slice is not None:
             self.lerobot_keys["action_eef_pose"] = "action.eef_pose"
         if "teleop_base_height_command" in self.hdf5_keys:
             self.lerobot_keys["teleop_base_height_command"] = "teleop.base_height_command"

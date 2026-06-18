@@ -47,11 +47,17 @@ alex_ability_hands_config = {
         modality_keys=_JOINT_STATE_GROUPS,
         sin_cos_embedding_keys=_JOINT_STATE_GROUPS,
     ),
+    # EEF action: the policy outputs left/right wrist target poses (pos 3 + quat wxyz 4 = 7
+    # each) plus the 20 ability-hand finger joints. The wrist poses are streamed to the IHMC
+    # IK streamer (see isaaclab_arena_gr00t/streaming/gr00t_eef_ikstream_bridge.py), which
+    # resolves the whole-body arm/torso joints on the robot; the fingers drive the hand
+    # interface directly. Poses are kept as raw pos+quat (NON_EEF/DEFAULT) rather than GR00T's
+    # rot6d/rotvec EEF formats so the stored representation matches what the bridge sends.
     "action": ModalityConfig(
         delta_indices=list(range(ALEX_ACTION_HORIZON)),
         modality_keys=[
-            "left_arm",
-            "right_arm",
+            "left_wrist_pose",
+            "right_wrist_pose",
             "hands",
         ],
         action_configs=[

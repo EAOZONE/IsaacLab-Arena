@@ -15,16 +15,24 @@
 # GR00T finetune: isaaclab_arena_gr00t/embodiments/alex/alex_data_config.py
 # Colab notebook:  isaaclab_arena_gr00t/training/alex_colab_finetune.ipynb
 
-data_root: "/tmp"
+data_root: "/datasets/alex_microwave"
 
-hdf5_name: "alex_demo.hdf5"
+hdf5_name: "new_demo.hdf5"
 
 language_instruction: "Open the microwave."
 task_index: 0
 
 # HDF5 fields written by record_demos.py / generate_dataset.py + ArenaEnvRecorderManagerCfg.
 state_name_sim: "robot_joint_pos"
-action_name_sim: "processed_actions"
+# EEF action: train on the raw Pink IK ``actions`` stream (EE target poses + fingers), not
+# the post-IK ``processed_actions`` joint targets. The 34-dim ``actions`` vector is sliced
+# into the wrist-pose columns and the finger-joint columns below; the wrist poses feed the
+# IK streamer at deploy (gr00t_eef_ikstream_bridge.py).
+action_name_sim: "actions"
+# actions[:, 0:14] = [left pos3 + quat4, right pos3 + quat4] -> action.eef_pose (wrist poses).
+action_eef_pose_slice: [0, 14]
+# actions[:, 14:34] = 20 ability-hand finger joints -> the `hands` joint action column.
+action_joint_slice: [14, 34]
 # Stereo ZED cameras recorded in HDF5 under camera_obs/.
 video_cameras:
   zed_left_cam_rgb: observation.images.zed_left_cam
@@ -52,7 +60,8 @@ policy_joints_config_path: "isaaclab_arena_gr00t/embodiments/alex/alex_gr00t_joi
 robot_type: "alex_ability_hands"
 
 state_joints_config_path: "isaaclab_arena_gr00t/embodiments/alex/alex_49dof_joint_space.yaml"
-action_joints_config_path: "isaaclab_arena_gr00t/embodiments/alex/alex_34dof_action_joint_space.yaml"
+# Describes only the 20 finger joints of actions[:, 14:34] (the EE-pose columns are not joints).
+action_joints_config_path: "isaaclab_arena_gr00t/embodiments/alex/alex_20dof_hand_action_joint_space.yaml"
 
 original_image_size: [480, 640, 3]
 target_image_size: [480, 640, 3]
