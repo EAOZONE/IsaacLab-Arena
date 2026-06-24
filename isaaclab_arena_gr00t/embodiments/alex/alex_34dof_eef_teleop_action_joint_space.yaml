@@ -1,0 +1,45 @@
+# Copyright (c) 2025-2026, The Isaac Lab Arena Project Developers (https://github.com/isaac-sim/IsaacLab-Arena/blob/main/CONTRIBUTORS.md).
+# All rights reserved.
+#
+# SPDX-License-Identifier: Apache-2.0
+
+# Column order for the raw Pink IK ``actions`` stream on ``alex_v2_ability_hands``:
+# [left wrist pose 7 | right wrist pose 7 | ability-hand teleop joints 20] = 34.
+# Matches ``build_alex_ability_hand_teleop_action_order()`` in alex.py.
+joints:
+  l_pos_x: 0
+  l_pos_y: 1
+  l_pos_z: 2
+  l_quat_x: 3
+  l_quat_y: 4
+  l_quat_z: 5
+  l_quat_w: 6
+  r_pos_x: 7
+  r_pos_y: 8
+  r_pos_z: 9
+  r_quat_x: 10
+  r_quat_y: 11
+  r_quat_z: 12
+  r_quat_w: 13
+  left_ability_hand_index_q1: 14
+  left_ability_hand_middle_q1: 15
+  left_ability_hand_ring_q1: 16
+  left_ability_hand_pinky_q1: 17
+  right_ability_hand_index_q1: 18
+  right_ability_hand_middle_q1: 19
+  right_ability_hand_ring_q1: 20
+  right_ability_hand_pinky_q1: 21
+  left_ability_hand_thumb_q1: 22
+  right_ability_hand_thumb_q1: 23
+  left_ability_hand_index_q2: 24
+  left_ability_hand_middle_q2: 25
+  left_ability_hand_ring_q2: 26
+  left_ability_hand_pinky_q2: 27
+  right_ability_hand_index_q2: 28
+  right_ability_hand_middle_q2: 29
+  right_ability_hand_ring_q2: 30
+  right_ability_hand_pinky_q2: 31
+  left_ability_hand_thumb_q2: 32
+  right_ability_hand_thumb_q2: 33
+
+total_joints: 34

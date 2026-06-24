@@ -40,6 +40,7 @@ from isaaclab_teleop.xr_cfg import XrAnchorRotationMode
 from isaaclab_arena.assets.register import register_asset
 from isaaclab_arena.embodiments.common.arm_mode import ArmMode
 from isaaclab_arena.embodiments.common.mimic_utils import get_rigid_and_articulated_object_poses
+from isaaclab_arena.embodiments.common.pink_ik_failure_tracking import IKFailureTrackingPinkInverseKinematicsAction
 from isaaclab_arena.embodiments.embodiment_base import EmbodimentBase
 from isaaclab_arena.terms.events import reset_all_articulation_joints
 from isaaclab_arena.utils.pose import Pose
@@ -1321,6 +1322,7 @@ class AlexActionsCfg:
     """Action configuration for Alex using PINK IK end-effector control."""
 
     upper_body_ik = PinkInverseKinematicsActionCfg(
+        class_type=IKFailureTrackingPinkInverseKinematicsAction,
         pink_controlled_joint_names=ARM_JOINT_NAMES_LIST,
         hand_joint_names=[],
         target_eef_link_names={
@@ -1582,6 +1584,22 @@ class AlexMimicEnv(ManagerBasedRLMimicEnv):
         state = self.scene.get_state(is_relative=True)
         return get_rigid_and_articulated_object_poses(state, env_ids)
 
+    def get_subtask_term_signals(self, env_ids: Sequence[int] | None = None) -> dict[str, torch.Tensor]:
+        """Forward the ``subtask_terms`` observation group as subtask-termination signals.
+
+        Enables headless (``--auto``) Mimic annotation: the task attaches a ``subtask_terms``
+        observation group (see ``get_mimic_subtask_obs_cfg``) and this returns its per-term flags.
+        Raises if the task did not provide one (only manual annotation is then possible).
+        """
+        if env_ids is None:
+            env_ids = slice(None)
+        if "subtask_terms" not in self.obs_buf:
+            raise NotImplementedError(
+                "Auto Mimic annotation requires a 'subtask_terms' observation group; this task does "
+                "not provide one. Use manual annotation (omit --auto) instead."
+            )
+        return {name: value[env_ids] for name, value in self.obs_buf["subtask_terms"].items()}
+
 
 class AlexAbilityHandMimicEnv(AlexMimicEnv):
     """Mimic environment for Alex with Ability Hands (34-D Pink IK teleop actions)."""
@@ -1639,6 +1657,7 @@ class AlexAbilityHandActionsCfg:
     """Action configuration for Alex with Psyonic Ability Hands — PINK IK wrist control."""
 
     upper_body_ik = PinkInverseKinematicsActionCfg(
+        class_type=IKFailureTrackingPinkInverseKinematicsAction,
         pink_controlled_joint_names=ARM_WRIST_JOINT_NAMES_LIST,
         hand_joint_names=ABILITY_HAND_TELEOP_JOINT_ORDER,
         target_eef_link_names={

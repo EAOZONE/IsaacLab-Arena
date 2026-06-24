@@ -3,6 +3,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
+import os
 from typing import Any
 
 import isaaclab.sim as sim_utils
@@ -137,6 +138,41 @@ class Table(LibraryBackground):
     object_min_z = -0.05
 
     def __init__(self):
+        super().__init__()
+
+
+@register_asset
+class ViralTable(LibraryBackground):
+    """The GR00T-VisualSim2Real (VIRAL) table (Seattle lab table) with baked colliders.
+
+    Neither file is committed. Copy the raw mesh once per clone (on the host) and bake static
+    colliders into ``viral_table.usd`` inside the container::
+
+        python isaaclab_arena/scripts/viral/import_viral_assets.py
+        /isaac-sim/python.sh isaaclab_arena/scripts/viral/build_viral_table.py
+
+    or point ``ARENA_VIRAL_ASSET_DIR`` at a directory containing ``viral_table.usd``. The table
+    is ~0.76 m tall with its origin at the base; sink it (via the env's ``initial_pose``) so the
+    top lands in the robot's reach zone.
+    """
+
+    name = "viral_table"
+    tags = ["background", "viral"]
+    usd_path = os.path.join(
+        os.environ.get("ARENA_VIRAL_ASSET_DIR", os.path.join(os.path.dirname(__file__), "viral", "usd")),
+        "viral_table.usd",
+    )
+    # Drop threshold below the (sunk) tabletop but above the floor; rolled-off objects reset.
+    object_min_z = -0.1
+
+    def __init__(self):
+        assert os.path.exists(self.usd_path), (
+            f"VIRAL table USD not found at {self.usd_path}.\n"
+            "Build it once per clone with:\n"
+            "  python isaaclab_arena/scripts/viral/import_viral_assets.py   # (host)\n"
+            "  /isaac-sim/python.sh isaaclab_arena/scripts/viral/build_viral_table.py   # (container)\n"
+            "or point ARENA_VIRAL_ASSET_DIR at a directory containing viral_table.usd."
+        )
         super().__init__()
 
 

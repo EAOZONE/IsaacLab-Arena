@@ -90,3 +90,9 @@ core.*
 
 # Development and cache folders
 /__*
+
+# VIRAL (GR00T-VisualSim2Real) assets copied in by scripts/viral/import_viral_assets.py
+isaaclab_arena/assets/viral/usd/
+
+# DoorMan generated door assets (scripts/doorman_gen/generate_doors.py)
+isaaclab_arena/assets/doorman_doors/usd/

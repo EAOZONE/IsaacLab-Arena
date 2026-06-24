@@ -236,6 +236,152 @@ class WsAlexDoor(LibraryObject, Openable):
         )
 
 
+# --- DoorMan procedural doors -----------------------------------------------------------
+# Articulated door USDs generated locally (not committed) by
+# ``isaaclab_arena/scripts/doorman_gen/generate_doors.py``. Override the directory with
+# ``ARENA_DOORMAN_DOORS_DIR``.
+_DOORMAN_DOORS_DIR = os.environ.get(
+    "ARENA_DOORMAN_DOORS_DIR", os.path.join(os.path.dirname(__file__), "doorman_doors", "usd")
+)
+
+
+def doorman_door_path(door_index: int) -> str:
+    """Resolve the USD path for a generated DoorMan door by index."""
+    return os.path.join(_DOORMAN_DOORS_DIR, f"door_{door_index:04d}.usd")
+
+
+def list_doorman_doors() -> list[str]:
+    """Return the sorted list of generated DoorMan door USD paths (empty if none generated)."""
+    import glob
+
+    return sorted(glob.glob(os.path.join(_DOORMAN_DOORS_DIR, "door_*.usd")))
+
+
+@register_asset
+class DoormanDoor(LibraryObject, Openable):
+    """A procedurally-generated DoorMan articulated door (revolute ``hinge_joint``).
+
+    Doors are generated per clone (not committed) with::
+
+        /isaac-sim/python.sh isaaclab_arena/scripts/doorman_gen/generate_doors.py --num_doors 15
+
+    or point ``ARENA_DOORMAN_DOORS_DIR`` at a directory of ``door_NNNN.usd`` files. Select a
+    specific door with ``door_index``; the openable DOF is the ``hinge_joint``.
+    """
+
+    name = "doorman_door"
+    tags = ["object", "openable", "doorman"]
+    object_type = ObjectType.ARTICULATION
+
+    openable_joint_name = "hinge_joint"
+    openable_threshold = 0.5
+
+    def __init__(
+        self,
+        instance_name: str | None = None,
+        prim_path: str | None = None,
+        initial_pose: Pose | None = None,
+        door_index: int = 0,
+    ):
+        self.usd_path = doorman_door_path(door_index)
+        assert os.path.exists(self.usd_path), (
+            f"DoorMan door not found at {self.usd_path}.\n"
+            "Generate the doors once per clone inside the container with:\n"
+            "  /isaac-sim/python.sh isaaclab_arena/scripts/doorman_gen/generate_doors.py --num_doors 15\n"
+            "or point ARENA_DOORMAN_DOORS_DIR at a directory of door_NNNN.usd files."
+        )
+        super().__init__(
+            instance_name=instance_name,
+            prim_path=prim_path,
+            initial_pose=initial_pose,
+            openable_joint_name=self.openable_joint_name,
+            openable_threshold=self.openable_threshold,
+        )
+
+
+# --- VIRAL (GR00T-VisualSim2Real) graspable objects -------------------------------------
+# Self-contained USDA assets copied into ``assets/viral/usd`` by
+# ``isaaclab_arena/scripts/viral/import_viral_assets.py`` (not committed). Override the
+# directory with ``ARENA_VIRAL_ASSET_DIR``.
+_VIRAL_ASSET_DIR = os.environ.get(
+    "ARENA_VIRAL_ASSET_DIR", os.path.join(os.path.dirname(__file__), "viral", "usd")
+)
+
+
+def _viral_usd_path(file_name: str) -> str:
+    """Resolve a copied VIRAL asset path (assertion points at the import script if missing)."""
+    return os.path.join(_VIRAL_ASSET_DIR, file_name)
+
+
+class ViralObject(LibraryObject):
+    """A graspable VIRAL object loaded from a locally-copied USDA file.
+
+    The USDA is not committed; copy it once per clone with::
+
+        python isaaclab_arena/scripts/viral/import_viral_assets.py
+
+    or point ``ARENA_VIRAL_ASSET_DIR`` at a directory containing the files.
+    """
+
+    tags = ["object", "viral"]
+    object_type = ObjectType.RIGID
+
+    def __init__(
+        self,
+        instance_name: str | None = None,
+        prim_path: str | None = None,
+        initial_pose: Pose | None = None,
+        scale: tuple[float, float, float] | None = None,
+    ):
+        assert self.usd_path is not None and os.path.exists(self.usd_path), (
+            f"VIRAL asset not found at {self.usd_path}.\n"
+            "Copy it once per clone with:\n"
+            "  python isaaclab_arena/scripts/viral/import_viral_assets.py\n"
+            "or point ARENA_VIRAL_ASSET_DIR at a directory containing the files."
+        )
+        super().__init__(instance_name=instance_name, prim_path=prim_path, initial_pose=initial_pose, scale=scale)
+
+
+@register_asset
+class ViralCup(ViralObject):
+    """VIRAL cup."""
+
+    name = "viral_cup"
+    usd_path = _viral_usd_path("cup.usda")
+
+
+@register_asset
+class ViralMug(ViralObject):
+    """VIRAL coffee mug."""
+
+    name = "viral_mug"
+    usd_path = _viral_usd_path("coffeemug.usda")
+
+
+@register_asset
+class ViralBanana(ViralObject):
+    """VIRAL banana."""
+
+    name = "viral_banana"
+    usd_path = _viral_usd_path("banana.usda")
+
+
+@register_asset
+class ViralApple(ViralObject):
+    """VIRAL apple."""
+
+    name = "viral_apple"
+    usd_path = _viral_usd_path("apple.usda")
+
+
+@register_asset
+class ViralHammer(ViralObject):
+    """VIRAL hammer."""
+
+    name = "viral_hammer"
+    usd_path = _viral_usd_path("hammer.usda")
+
+
 @register_asset
 class CoffeeMachine(LibraryObject, Pressable):
     """

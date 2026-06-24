@@ -92,7 +92,11 @@ class AlexOpenDoorEnvironment(ExampleEnvironmentBase):
         background_name = args_cli.background or _DEFAULT_BACKGROUND[args_cli.door]
         background = self.asset_registry.get_asset_by_name(background_name)()
         door = self._make_door(args_cli.door)
-        assets = [background, door]
+        # Add a dome light so the cameras are not black: the default ws_alex_door
+        # background (ground_plane) ships no lights. Mirrors alex_put_and_close_door
+        # and the table-top environments; harmless extra fill for the kitchen background.
+        light = self.asset_registry.get_asset_by_name("light")()
+        assets = [background, door, light]
 
         embodiment = self.asset_registry.get_asset_by_name(args_cli.embodiment)(enable_cameras=args_cli.enable_cameras)
         spawn_xyz, spawn_rot = _ALEX_SPAWN_POSE

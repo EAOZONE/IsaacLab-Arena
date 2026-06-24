@@ -52,16 +52,16 @@ def _joint_name_to_policy_group(
             return "right_arm"
         if prefix == "waist":
             return "waist"
-        return None
 
-    if tag == "OXE_DROID":
+    elif tag == "OXE_DROID":
         # DROID: policy groups are joint_position, gripper_position
         for group, names in policy_joints_config.items():
             if joint_name in names:
                 return group
         return None
 
-    # Fallback: find the policy group that contains this joint name
+    # Fallback: find the policy group that contains this joint/action element name
+    # (e.g. Alex EEF teleop keys l_pos_x / r_quat_w in left_wrist_pose / right_wrist_pose).
     for group, names in policy_joints_config.items():
         if joint_name in names:
             return group
@@ -99,6 +99,18 @@ def reorder_sim_joints_to_config_order_np(
         sim_idx = sim_name_to_idx[joint_name]
         reordered[:, config_idx] = joint_pos_sim_np[:, sim_idx]
     return reordered
+
+
+def filter_policy_joints_config_for_modality_keys(
+    modality_keys: list[str],
+    policy_joints_config: dict[str, list[str]],
+) -> dict[str, list[str]]:
+    """Keep only policy joint groups referenced by a modality (state or action)."""
+    return {
+        group: policy_joints_config[group]
+        for group in modality_keys
+        if group in policy_joints_config
+    }
 
 
 def remap_sim_joints_to_policy_joints_from_np(

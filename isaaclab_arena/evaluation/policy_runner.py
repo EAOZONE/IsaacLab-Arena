@@ -58,6 +58,20 @@ def is_distributed(args_cli: argparse.Namespace) -> bool:
     )
 
 
+def _ik_failed_env_ids(env, env_ids: torch.Tensor) -> torch.Tensor:
+    """Subset of ``env_ids`` whose episode ended due to an IK-solver failure.
+
+    Returns an empty tensor unless the env defines the optional ``ik_failure`` termination term
+    (enabled by ``--fail_on_ik_error``). The term's done buffer survives ``step()`` (it is filled
+    on ``compute`` and not cleared on reset), so it is safe to read here.
+    """
+    tm = getattr(env.unwrapped, "termination_manager", None)
+    if tm is None or "ik_failure" not in tm.active_terms:
+        return env_ids[:0]
+    mask = tm.get_term("ik_failure")[env_ids].bool()
+    return env_ids[mask]
+
+
 def rollout_policy(
     env,
     policy: "PolicyBase",
@@ -65,6 +79,7 @@ def rollout_policy(
     num_episodes: int | None,
     language_instruction: str | None = None,
     perturbation: "ArmPoke | None" = None,
+    ikstreamer_bridge=None,
 ) -> dict[str, Any]:
     assert num_steps is not None or num_episodes is not None, "Either num_steps or num_episodes must be provided"
     assert num_steps is None or num_episodes is None, "Only one of num_steps or num_episodes must be provided"
@@ -86,11 +101,14 @@ def rollout_policy(
 
         num_episodes_completed = 0
         num_steps_completed = 0
+        num_ik_retries = 0
         episode_step = 0
 
         # Ramp the poke each episode: episode k (1-based) runs at k x the base wrench.
         if perturbation is not None:
             perturbation.set_episode_scale(1.0)
+
+        ikstreamer_dim_mismatch_warned = [False] if ikstreamer_bridge is not None else None
 
         while True:
             with torch.inference_mode():
@@ -99,6 +117,15 @@ def rollout_policy(
                     perturbation.apply(episode_step)
                 obs, _, terminated, truncated, _ = env.step(actions)
                 episode_step += 1
+
+                if ikstreamer_bridge is not None:
+                    from isaaclab_arena_gr00t.streaming.gr00t_eef_ikstream_bridge import stream_env_action_to_ikstreamer
+
+                    stream_env_action_to_ikstreamer(
+                        ikstreamer_bridge,
+                        actions,
+                        dim_mismatch_warned=ikstreamer_dim_mismatch_warned,
+                    )
 
                 if terminated.any() or truncated.any():
                     # Only reset policy for those envs that are terminated or truncated
@@ -110,8 +137,12 @@ def rollout_policy(
                     policy.reset(env_ids=env_ids)
                     # Per-episode poke counter restarts so each new episode gets poked.
                     episode_step = 0
+                    # Episodes that ended due to an IK-solver failure are retried, not scored:
+                    # exclude them from the count so we keep going until num_episodes clean episodes.
+                    ik_failed_ids = _ik_failed_env_ids(env, env_ids)
+                    num_ik_retries += ik_failed_ids.shape[0]
                     # Break if number of episodes is reached
-                    completed_episodes = env_ids.shape[0]
+                    completed_episodes = env_ids.shape[0] - ik_failed_ids.shape[0]
                     num_episodes_completed += completed_episodes
                     # Ramp the poke for the upcoming episode (1-based: episode k -> k x base).
                     if perturbation is not None:
@@ -134,6 +165,8 @@ def rollout_policy(
                         break
 
         pbar.close()
+        if num_ik_retries:
+            print(f"[Rank {get_local_rank()}/{get_world_size()}] IK-error retries (excluded): {num_ik_retries}")
 
     except Exception as e:
         if pbar is not None:
@@ -292,9 +325,24 @@ def main():
 
         steps_str = f"{num_steps} steps" if num_steps is not None else f"{num_episodes} episodes"
         print(f"[Rank {local_rank}/{world_size}] Starting rollout ({steps_str})")
-        metrics = rollout_policy(
-            env, policy, num_steps, num_episodes, args_cli.language_instruction, perturbation=perturbation
-        )
+
+        ikstreamer_bridge = None
+        try:
+            from isaaclab_arena_gr00t.streaming.gr00t_eef_ikstream_bridge import create_ikstreamer_bridge_from_args
+
+            ikstreamer_bridge = create_ikstreamer_bridge_from_args(args_cli)
+            metrics = rollout_policy(
+                env,
+                policy,
+                num_steps,
+                num_episodes,
+                args_cli.language_instruction,
+                perturbation=perturbation,
+                ikstreamer_bridge=ikstreamer_bridge,
+            )
+        finally:
+            if ikstreamer_bridge is not None:
+                ikstreamer_bridge.close()
 
         if metrics is not None:
             print(f"[Rank {local_rank}/{world_size}] Metrics: {metrics_to_plain_python_types(metrics)}")

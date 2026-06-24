@@ -15,6 +15,7 @@
 from isaaclab.app import AppLauncher
 
 from isaaclab_arena.cli.isaaclab_arena_cli import get_isaaclab_arena_cli_parser
+from isaaclab_arena_gr00t.streaming.gr00t_eef_ikstream_bridge import add_ikstreamer_cli_args
 from isaaclab_arena_environments.cli import add_example_environments_cli_args, get_arena_builder_from_cli
 
 # add argparse arguments
@@ -36,6 +37,7 @@ parser.add_argument(
         " --num_envs is 1."
     ),
 )
+add_ikstreamer_cli_args(parser)
 # Add the example environments CLI args
 # NOTE(alexmillane, 2025.09.04): This has to be added last, because
 # of the app specific flags being parsed after the global flags.
@@ -142,10 +144,22 @@ def main():
     reapply_viewer_cfg(env)
     env = env.unwrapped
 
-    teleop_interface = Se3Keyboard(Se3KeyboardCfg(pos_sensitivity=0.1, rot_sensitivity=0.1))
-    teleop_interface.add_callback("N", play_cb)
-    teleop_interface.add_callback("B", pause_cb)
-    print('Press "B" to pause and "N" to resume the replayed actions.')
+    # The Se3Keyboard pause/resume interface needs the Kit app window (omni.appwindow),
+    # which is absent under --headless. Only create it when a window exists.
+    teleop_interface = None
+    if not args_cli.headless:
+        teleop_interface = Se3Keyboard(Se3KeyboardCfg(pos_sensitivity=0.1, rot_sensitivity=0.1))
+        teleop_interface.add_callback("N", play_cb)
+        teleop_interface.add_callback("B", pause_cb)
+        print('Press "B" to pause and "N" to resume the replayed actions.')
+
+    # Optionally mirror replayed actions into the IHMC RDX IK streamer over UDP.
+    from isaaclab_arena_gr00t.streaming.gr00t_eef_ikstream_bridge import (
+        create_ikstreamer_bridge_from_args,
+        stream_env_action_to_ikstreamer,
+    )
+
+    ikstreamer_bridge = create_ikstreamer_bridge_from_args(args_cli)
 
     # Determine if state validation should be conducted
     state_validation_enabled = False
@@ -162,7 +176,11 @@ def main():
 
     # reset before starting
     env.reset()
-    teleop_interface.reset()
+    if teleop_interface is not None:
+        teleop_interface.reset()
+
+    # Warn once if the action space is not the 34-dim EEF layout the IK streamer expects.
+    ikstreamer_dim_mismatch_warned = [False] if ikstreamer_bridge is not None else None
 
     # simulate environment -- run everything in inference mode
     episode_names = list(dataset_file_handler.get_episode_names())
@@ -212,6 +230,14 @@ def main():
                         continue
                 env.step(actions)
 
+                # Mirror env-0's action into the RDX IK streamer (wrist poses only).
+                if ikstreamer_bridge is not None:
+                    stream_env_action_to_ikstreamer(
+                        ikstreamer_bridge,
+                        actions,
+                        dim_mismatch_warned=ikstreamer_dim_mismatch_warned,
+                    )
+
                 if state_validation_enabled:
                     state_from_dataset = env_episode_data_map[0].get_next_state()
                     if state_from_dataset is not None:
@@ -230,6 +256,8 @@ def main():
     # Close environment after replay in complete
     plural_trailing_s = "s" if replayed_episode_count > 1 else ""
     print(f"Finished replaying {replayed_episode_count} episode{plural_trailing_s}.")
+    if ikstreamer_bridge is not None:
+        ikstreamer_bridge.close()
     env.close()
 
 

@@ -36,6 +36,7 @@ from isaaclab_arena_gr00t.policy.config.gr00t_closedloop_policy_config import Gr
 from isaaclab_arena_gr00t.utils.image_conversion import resize_frames_with_padding
 from isaaclab_arena_gr00t.utils.io_utils import load_robot_joints_config_from_yaml, to_numpy, to_tensor
 from isaaclab_arena_gr00t.utils.joints_conversion import (
+    filter_policy_joints_config_for_modality_keys,
     remap_policy_joints_to_sim_joints_np,
     remap_sim_joints_to_policy_joints_from_np,
 )
@@ -262,14 +263,16 @@ def build_gr00t_policy_observations(
     target_image_size = getattr(policy_config, "target_image_size", None)
     if target_image_size is not None:
         rgb_list_np = resize_rgb_for_policy(rgb_list_np=rgb_list_np, target_image_size=target_image_size)
-    joint_pos_state_policy = remap_sim_joints_to_policy_joints_from_np(
-        joint_pos_sim_np, robot_state_joints_config, policy_joints_config
-    )
-    num_envs = rgb_list_np[0].shape[0]
-
     language_keys = modality_configs["language"].modality_keys
     video_keys = modality_configs["video"].modality_keys
     state_keys = modality_configs["state"].modality_keys
+    state_policy_joints_config = filter_policy_joints_config_for_modality_keys(
+        state_keys, policy_joints_config
+    )
+    joint_pos_state_policy = remap_sim_joints_to_policy_joints_from_np(
+        joint_pos_sim_np, robot_state_joints_config, state_policy_joints_config
+    )
+    num_envs = rgb_list_np[0].shape[0]
     assert len(video_keys) == len(
         rgb_list_np
     ), f"number of video keys ({len(video_keys)}) and rgb inputs ({len(rgb_list_np)}) must match"

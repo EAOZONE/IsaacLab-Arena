@@ -61,6 +61,22 @@ joints:
     - right_ability_hand_pinky_q2
     - right_ability_hand_thumb_q1
     - right_ability_hand_thumb_q2
+  left_wrist_pose:
+    - l_pos_x
+    - l_pos_y
+    - l_pos_z
+    - l_quat_x
+    - l_quat_y
+    - l_quat_z
+    - l_quat_w
+  right_wrist_pose:
+    - r_pos_x
+    - r_pos_y
+    - r_pos_z
+    - r_quat_x
+    - r_quat_y
+    - r_quat_z
+    - r_quat_w
   hands:
     - left_ability_hand_index_q1
     - left_ability_hand_middle_q1

@@ -267,6 +267,11 @@ class ArenaEnvBuilder:
             assert not isinstance(embodiment, NoEmbodiment), "Mimic mode requires an embodiment to be specified"
             assert not isinstance(task, NoTask), "Mimic mode requires a task to be specified"
             task_mimic_env_cfg = task.get_mimic_env_cfg(arm_mode=self.arena_env.embodiment.arm_mode)
+            # Attach the task's subtask-termination observation group (if any) so headless
+            # (``--auto``) Mimic annotation can read it via ``env.get_subtask_term_signals()``.
+            mimic_subtask_obs_cfg = task.get_mimic_subtask_obs_cfg()
+            if mimic_subtask_obs_cfg is not None:
+                setattr(observation_cfg, "subtask_terms", mimic_subtask_obs_cfg)
             env_cfg = IsaacArenaManagerBasedMimicEnvCfg(
                 observations=observation_cfg,
                 actions=actions_cfg,

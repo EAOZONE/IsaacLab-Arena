@@ -40,16 +40,17 @@
         "left_wrist_pose": {
             "start": 0,
             "end": 7,
-            "original_key": "action.eef_pose"
+            "original_key": "action"
         },
         "right_wrist_pose": {
             "start": 7,
             "end": 14,
-            "original_key": "action.eef_pose"
+            "original_key": "action"
         },
         "hands": {
-            "start": 0,
-            "end": 20
+            "start": 14,
+            "end": 34,
+            "original_key": "action"
         }
     },
     "video": {

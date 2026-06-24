@@ -33,12 +33,12 @@ from isaaclab_arena_gr00t.utils.robot_eef_pose import EefPose
 from isaaclab_arena_gr00t.utils.robot_joints import JointsAbsPosition
 
 _NON_JOINT_MODALITY_GROUPS = {
-    "left_wrist_pose",
-    "right_wrist_pose",
     "base_height_command",
     "navigate_command",
     "torso_orientation_rpy_command",
 }
+
+_EEF_WRIST_MODALITY_GROUPS = {"left_wrist_pose", "right_wrist_pose"}
 
 
 def _filter_policy_joints_config_for_modality(
@@ -66,6 +66,43 @@ def _get_policy_joint_names_for_modality(
             continue
         names.extend(policy_joints_config[group])
     return names
+
+
+def _pack_eef_lerobot_action(
+    raw_actions: np.ndarray,
+    config: Gr00tDatasetConfig,
+    action_joints_config: dict[str, Any],
+    policy_joints_config: dict[str, list[str]],
+    policy_modality_config: dict[str, Any],
+) -> list[np.ndarray]:
+    """Pack HDF5 Pink IK ``actions`` into a 34-dim LeRobot action [wrists | fingers]."""
+    assert config.action_eef_pose_slice is not None and config.action_joint_slice is not None
+    eef_start, eef_end = config.action_eef_pose_slice
+    joint_start, joint_end = config.action_joint_slice
+    eef_block = np.asarray(raw_actions[:, eef_start:eef_end], dtype=np.float64)
+    finger_block = raw_actions[:, joint_start:joint_end]
+    finger_joints = JointsAbsPosition.from_array(finger_block, action_joints_config, device="cpu")
+    remapped_fingers = remap_sim_joints_to_policy_joints(finger_joints, {"hands": policy_joints_config["hands"]})
+
+    packed_parts: list[np.ndarray] = []
+    for joint_group in policy_modality_config["action"].keys():
+        if joint_group in _EEF_WRIST_MODALITY_GROUPS:
+            segment = policy_modality_config["action"][joint_group]
+            packed_parts.append(eef_block[:, segment["start"] : segment["end"]])
+        elif joint_group in _NON_JOINT_MODALITY_GROUPS:
+            continue
+        else:
+            assert joint_group in remapped_fingers, f"missing remapped action group {joint_group}"
+            packed_parts.append(remapped_fingers[joint_group])
+
+    packed = np.concatenate(packed_parts, axis=1)
+    expected_dim = sum(
+        policy_modality_config["action"][group]["end"] - policy_modality_config["action"][group]["start"]
+        for group in policy_modality_config["action"].keys()
+        if group not in _NON_JOINT_MODALITY_GROUPS
+    )
+    assert packed.shape == (raw_actions.shape[0], expected_dim), f"{packed.shape} != ({raw_actions.shape[0]}, {expected_dim})"
+    return [row for row in packed]
 
 
 def wait_for_video_completion(video_path: str, max_wait_time: int = 60, check_interval: float = 0.5) -> bool:
@@ -393,6 +430,19 @@ def convert_trajectory_to_df(
         elif key == "action":
             # NOTE(xinjieyao, 2025-09-25): remove the last idle action due to Lab reports actions
             joints = joints[:-1]
+            if (
+                config.action_pack_eef_pose
+                and config.action_eef_pose_slice is not None
+                and config.action_joint_slice is not None
+            ):
+                data[lerobot_key_name] = _pack_eef_lerobot_action(
+                    joints,
+                    config,
+                    action_joints_config,
+                    policy_joints_config,
+                    policy_modality_config,
+                )
+                continue
             # When the action stream packs EE poses and joints together (raw Pink IK `actions`),
             # only the finger columns are joints; restrict the joint-remap path to that slice.
             if config.action_joint_slice is not None:
@@ -414,14 +464,8 @@ def convert_trajectory_to_df(
         # 1.2. Fill in the missing joints with zeros
         ordered_joints = []
         for joint_group in policy_modality_config[key].keys():
-            # NOTE(xinjieyao, 2025-09-25): Those are not joint position commands, which do not need remapping orders
-            if (
-                joint_group == "left_wrist_pose"
-                or joint_group == "right_wrist_pose"
-                or joint_group == "base_height_command"
-                or joint_group == "navigate_command"
-                or joint_group == "torso_orientation_rpy_command"
-            ):
+            # EE wrist poses are packed separately; teleop command groups are not joints.
+            if joint_group in _EEF_WRIST_MODALITY_GROUPS or joint_group in _NON_JOINT_MODALITY_GROUPS:
                 continue
             num_joints = (
                 policy_modality_config[key][joint_group]["end"] - policy_modality_config[key][joint_group]["start"]
@@ -466,7 +510,7 @@ def convert_trajectory_to_df(
 
     """Get eef pose action from a column slice of the packed action (optional)"""
 
-    if config.action_eef_pose_slice is not None:
+    if config.action_eef_pose_slice is not None and not config.action_pack_eef_pose:
         start, end = config.action_eef_pose_slice
         # Raw Pink IK `actions` packs [left pos3+quat4, right pos3+quat4, ...]; columns
         # [start:end] are the bimanual wrist target poses (matches left/right_wrist_pose modality).

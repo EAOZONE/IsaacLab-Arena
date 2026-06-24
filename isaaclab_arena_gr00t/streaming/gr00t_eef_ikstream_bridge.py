@@ -3,17 +3,17 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Stream a GR00T policy's end-effector action into the IHMC RDX IK streamer.
+"""Stream Arena end-effector targets into the IHMC RDX whole-body IK (Arena -> RDX).
 
-A GR00T policy trained on the Alex ability-hands EEF action space outputs, per step, a
-34-dim action ``[ left_wrist_pose(7) | right_wrist_pose(7) | hand_joints(20) ]`` where each
-wrist pose is ``pos(3) + quat(4)``. The IHMC ``RDXCapturyKinematicStreaming`` UI consumes
-hand target poses through a ``CapturyPoseReceiver`` that listens on a UDP port and feeds the
-``KinematicsStreamingToolboxInputMessage`` (whole-body IK), which resolves the arm/torso
-joints on the robot. This module turns the GR00T wrist-pose output into that UDP stream — so
-the policy commands *where the hands go* and the robot's IK streamer solves the rest.
+A GR00T policy (or a replayed dataset) on the Alex ability-hands EEF action space produces, per
+step, a 34-dim action ``[ left_wrist_pose(7) | right_wrist_pose(7) | hand_joints(20) ]`` where
+each wrist pose is ``pos(3) + quat(4)``. The RDX side (``RDXAlexArenaIKStreamingPanel`` +
+``ArenaIKStreamReceiver`` in the ihmc-alex repo) listens on a UDP port, decodes these hand
+targets, and feeds them to the ``KinematicsStreamingToolboxInputMessage`` (whole-body IK), which
+resolves the arm/torso joints on the robot. This module is the sender: the policy commands
+*where the hands go* and the robot's IK solver reproduces the rest.
 
-Wire format (reverse-engineered from ``CapturyPoseReceiver.decode``, little-endian)::
+Wire format (canonical Arena IK stream, little-endian)::
 
     int64   timestamp_microseconds
     per segment in ORDER = (LEFT_HAND, RIGHT_HAND, HEAD, CHEST):
@@ -21,30 +21,39 @@ Wire format (reverse-engineered from ``CapturyPoseReceiver.decode``, little-endi
         float32 quat_x, quat_y, quat_z, quat_w   # scalar-LAST (euclid Quaternion(x,y,z,w))
         float32 valid                            # > 0 -> pose is used, else ignored
 
-Total = 8 + 4 * (8 * 4) = 136 bytes. The receiver always reads all four segments, so a
-packet must include head/chest slots even when only the hands are driven (send valid=0 for
+Total = 8 + 4 * (8 * 4) = 136 bytes. ``ArenaIKStreamReceiver`` always reads all four segments,
+so a packet must include head/chest slots even when only the hands are driven (send valid=0 for
 unused segments).
 
 Note on conventions/frames:
-* Isaac Lab / Arena quaternions are scalar-FIRST ``(w, x, y, z)``; the wire is scalar-LAST.
-  ``send_hand_poses`` takes scalar-first quats by default and reorders them.
-* The wrist poses are in whatever frame the policy was trained in (Arena: the Alex
-  ``PELVIS_LINK`` frame). The receiver applies them as hand desireds in the streaming
-  toolbox's working frame; aligning those frames is a deployment-time calibration concern,
-  not handled here.
+* The wire is scalar-LAST ``(x, y, z, w)``. The Alex EEF action blocks streamed here are
+  *also* scalar-last (the Se3AbsRetargeter emits xyzw and the Pink IK action term consumes
+  xyzw), so :func:`create_ikstreamer_bridge_from_args` builds the bridge with
+  ``scalar_first_quat=False`` and passes the wrist quats through unchanged. ``send_hand_poses``
+  still accepts scalar-first ``(w, x, y, z)`` quats (the generic Isaac Lab convention) when a
+  caller constructs the bridge with the default ``scalar_first_quat=True``.
+* The wrist poses are in the frame the policy was trained in (Arena: the Alex ``PELVIS_LINK``
+  frame). ``RDXAlexArenaIKStreamingPanel`` reinterprets each pose in the synced robot's pelvis
+  frame and converts it to world before handing it to the IK solver, so the RDX robot moves the
+  same way Arena does regardless of where it stands in the world.
 """
 
 from __future__ import annotations
 
+import argparse
 import socket
 import struct
 import time
 from dataclasses import dataclass
 from enum import IntEnum
+from typing import TYPE_CHECKING
 
 import numpy as np
 
-# Default UDP port the IHMC CapturyPoseReceiver binds (matches the Captury->RDX bridge).
+if TYPE_CHECKING:
+    import torch
+
+# Default UDP port the RDX-side ArenaIKStreamReceiver binds.
 DEFAULT_IKSTREAMER_PORT = 2102
 
 # Per-segment payload: pos(3) + quat xyzw(4) + valid(1) = 8 float32.
@@ -54,7 +63,7 @@ _SEGMENT_STRUCT = struct.Struct("<8f")
 
 
 class Segment(IntEnum):
-    """Pose segments in ``CapturyPoseReceiver.Segment.ORDER`` (wire order)."""
+    """Pose segments in the Arena IK stream wire order."""
 
     LEFT_HAND = 0
     RIGHT_HAND = 1
@@ -68,6 +77,7 @@ _SEGMENT_ORDER = (Segment.LEFT_HAND, Segment.RIGHT_HAND, Segment.HEAD, Segment.C
 PACKET_SIZE_BYTES = _HEADER_STRUCT.size + len(_SEGMENT_ORDER) * _SEGMENT_STRUCT.size  # 136
 
 # GR00T EEF action layout: [left_wrist_pose(7) | right_wrist_pose(7) | hand_joints(20)].
+EEF_ACTION_DIM = 34
 LEFT_WRIST_POSE_SLICE = slice(0, 7)
 RIGHT_WRIST_POSE_SLICE = slice(7, 14)
 HAND_JOINTS_SLICE = slice(14, 34)
@@ -96,7 +106,7 @@ def _to_xyzw(quat: np.ndarray, scalar_first: bool) -> np.ndarray:
 
 
 def encode_pose_packet(timestamp_us: int, segments: dict[Segment, SegmentPose]) -> bytes:
-    """Encode a 136-byte CapturyPoseReceiver UDP packet.
+    """Encode a 136-byte Arena IK stream UDP packet.
 
     Segments absent from ``segments`` are emitted as invalid (zeroed) slots, since the
     receiver always reads all four. Quaternions in ``segments`` must already be scalar-last.
@@ -120,19 +130,21 @@ def split_gr00t_action(action: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.n
     preserved on each returned slice.
     """
     action = np.asarray(action, dtype=np.float32)
-    assert action.shape[-1] == 34, f"expected a 34-dim EEF action, got shape {action.shape}"
+    assert (
+        action.shape[-1] == EEF_ACTION_DIM
+    ), f"expected a {EEF_ACTION_DIM}-dim EEF action, got shape {action.shape}"
     return action[..., LEFT_WRIST_POSE_SLICE], action[..., RIGHT_WRIST_POSE_SLICE], action[..., HAND_JOINTS_SLICE]
 
 
 class IKStreamerBridge:
-    """UDP sender that streams hand target poses to an IHMC ``CapturyPoseReceiver``."""
+    """UDP sender that streams hand target poses to the RDX ``ArenaIKStreamReceiver``."""
 
     def __init__(self, host: str = "127.0.0.1", port: int = DEFAULT_IKSTREAMER_PORT, scalar_first_quat: bool = True):
         """Create the bridge.
 
         Args:
-            host: IKStreamer host (the machine running ``RDXCapturyKinematicStreaming``).
-            port: UDP port the ``CapturyPoseReceiver`` binds (default ``2102``).
+            host: RDX host (the machine running ``AlexRDXSimulationUI`` with Arena IK streaming).
+            port: UDP port the ``ArenaIKStreamReceiver`` binds (default ``2102``).
             scalar_first_quat: Interpret input quaternions as scalar-first ``(w, x, y, z)``
                 (Isaac Lab / Arena convention) and reorder to the wire's scalar-last layout.
                 Set False if callers already pass ``(x, y, z, w)``.
@@ -192,3 +204,74 @@ class IKStreamerBridge:
 
     def __exit__(self, *exc) -> None:
         self.close()
+
+
+def add_ikstreamer_cli_args(parser: argparse.ArgumentParser) -> None:
+    """Register CLI flags for mirroring Arena EEF actions into the RDX IK streamer."""
+    parser.add_argument(
+        "--stream_ikstreamer",
+        action="store_true",
+        default=False,
+        help=(
+            "Mirror each env-0 EEF action step to the RDX whole-body IK over UDP (Arena -> RDX)."
+            " Start AlexRDXSimulationUI and enable its 'Arena IK Streaming' panel before running."
+        ),
+    )
+    parser.add_argument(
+        "--ikstreamer_host",
+        type=str,
+        default="127.0.0.1",
+        help="Host the RDX ArenaIKStreamReceiver binds (used with --stream_ikstreamer).",
+    )
+    parser.add_argument(
+        "--ikstreamer_port",
+        type=int,
+        default=DEFAULT_IKSTREAMER_PORT,
+        help="UDP port the RDX ArenaIKStreamReceiver binds (used with --stream_ikstreamer).",
+    )
+
+
+def create_ikstreamer_bridge_from_args(args: argparse.Namespace) -> IKStreamerBridge | None:
+    """Create an :class:`IKStreamerBridge` when ``--stream_ikstreamer`` is set."""
+    if not getattr(args, "stream_ikstreamer", False):
+        return None
+    # The Alex EEF action blocks (and the dataset they were trained from) carry wrist
+    # quaternions scalar-LAST (x, y, z, w): the Se3AbsRetargeter emits xyzw and the Pink IK
+    # action term consumes xyzw (see ALEX_ABILITY_HAND_*_EE_ACTION_KEYS in embodiments/alex/alex.py).
+    # The wire is also scalar-last, so pass them through unchanged — do NOT reorder.
+    bridge = IKStreamerBridge(host=args.ikstreamer_host, port=args.ikstreamer_port, scalar_first_quat=False)
+    print(
+        "Streaming env-0 EEF actions to RDX IK streamer at"
+        f" {args.ikstreamer_host}:{args.ikstreamer_port}."
+    )
+    return bridge
+
+
+def stream_env_action_to_ikstreamer(
+    bridge: IKStreamerBridge,
+    actions: np.ndarray | torch.Tensor,
+    *,
+    env_index: int = 0,
+    dim_mismatch_warned: list[bool] | None = None,
+) -> None:
+    """Stream one env row from a batched action tensor to the IK streamer.
+
+    ``dim_mismatch_warned`` is an optional single-element list used to emit the dimension
+    warning at most once (pass ``[False]`` from the rollout loop).
+    """
+    action_value = actions[env_index]
+    if hasattr(action_value, "detach"):
+        action_row = action_value.detach().cpu().numpy()
+    else:
+        action_row = np.asarray(action_value, dtype=np.float32)
+    if action_row.shape[-1] == EEF_ACTION_DIM:
+        bridge.send_gr00t_action(action_row)
+        return
+    if dim_mismatch_warned is not None and dim_mismatch_warned[0]:
+        return
+    print(
+        f"Warning: --stream_ikstreamer expects a {EEF_ACTION_DIM}-dim EEF action but got"
+        f" {action_row.shape[-1]}; skipping IK streaming."
+    )
+    if dim_mismatch_warned is not None:
+        dim_mismatch_warned[0] = True

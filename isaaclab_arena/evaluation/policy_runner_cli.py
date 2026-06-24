@@ -5,6 +5,8 @@
 
 import argparse
 
+from isaaclab_arena_gr00t.streaming.gr00t_eef_ikstream_bridge import add_ikstreamer_cli_args
+
 
 def add_policy_runner_arguments(parser: argparse.ArgumentParser) -> None:
     """Add policy runner specific arguments to the parser."""
@@ -126,3 +128,4 @@ def add_policy_runner_arguments(parser: argparse.ArgumentParser) -> None:
         default=True,
         help="Show a red arrow at the poked link while the poke is active. Use --no-poke_marker to disable.",
     )
+    add_ikstreamer_cli_args(parser)

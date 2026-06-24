@@ -5,10 +5,42 @@
 
 
 from isaaclab.envs.mimic_env_cfg import MimicEnvCfg, SubTaskConfig
+from isaaclab.managers import ObservationGroupCfg as ObsGroup
+from isaaclab.managers import ObservationTermCfg as ObsTerm
 from isaaclab.utils import configclass
 
+from isaaclab_arena.affordances.openable import Openable
 from isaaclab_arena.embodiments.common.arm_mode import ArmMode
 from isaaclab_arena.tasks.common.mimic_default_params import MIMIC_DATAGEN_CONFIG_DEFAULTS
+
+# Door openness (normalized 0..1) above which the ``move_to_door`` subtask is considered complete:
+# the hand has reached the handle and the door has begun to swing. Used only for headless
+# (``--auto``) Mimic annotation.
+MOVE_TO_DOOR_OPENNESS_THRESHOLD = 0.05
+
+
+def make_open_door_subtask_obs_cfg(
+    openable_object: Openable, move_to_door_threshold: float = MOVE_TO_DOOR_OPENNESS_THRESHOLD
+) -> ObsGroup:
+    """Build the ``subtask_terms`` observation group that lets ``annotate_demos.py --auto`` detect
+    the ``move_to_door`` boundary headlessly, instead of a human pressing "S" in the GUI.
+
+    The single ``move_to_door`` term reads the door's normalized openness and flips True once it
+    exceeds ``move_to_door_threshold`` — a clean 0->1 edge as the door starts to open.
+    """
+
+    @configclass
+    class OpenDoorSubtaskObsCfg(ObsGroup):
+        move_to_door: ObsTerm = ObsTerm(
+            func=openable_object.is_open,
+            params={"threshold": move_to_door_threshold},
+        )
+
+        def __post_init__(self):
+            self.enable_corruption = False
+            self.concatenate_terms = False
+
+    return OpenDoorSubtaskObsCfg()
 
 
 @configclass

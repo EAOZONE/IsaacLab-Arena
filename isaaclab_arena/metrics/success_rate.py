@@ -33,9 +33,18 @@ class SuccessRecorder(RecorderTerm):
             # Record nothing.
             return None, None
         assert hasattr(self._env, "termination_manager")
-        assert "success" in self._env.termination_manager.active_terms
+        tm = self._env.termination_manager
+        assert "success" in tm.active_terms
         success_results = torch.zeros(len(env_ids), dtype=bool, device=self._env.device)
-        success_results |= self._env.termination_manager.get_term("success")[env_ids]
+        success_results |= tm.get_term("success")[env_ids]
+
+        # When IK-error retries are enabled, episodes that ended due to an IK-solver failure are
+        # discarded rather than scored: tag them NaN so compute_success_rate excludes them.
+        if "ik_failure" in tm.active_terms:
+            ik_failed = tm.get_term("ik_failure")[env_ids]
+            out = success_results.float()
+            out[ik_failed] = float("nan")
+            return self.name, out
 
         return self.name, success_results
 
@@ -62,7 +71,11 @@ def compute_success_rate(recorded_metric_data: list[np.ndarray]) -> float:
     all_demos_success_flags = np.concatenate(recorded_metric_data)
     assert all_demos_success_flags.ndim == 1
     assert all_demos_success_flags.shape[0] == num_demos
-    success_rate = np.mean(all_demos_success_flags)
+    # NaN-tagged episodes (e.g. IK-error retries) are excluded from the rate.
+    valid = all_demos_success_flags[~np.isnan(all_demos_success_flags.astype(float))]
+    if valid.size == 0:
+        return 0.0
+    success_rate = float(np.mean(valid))
     return success_rate
 
 

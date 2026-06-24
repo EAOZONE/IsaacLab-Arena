@@ -3,23 +3,24 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-# Convert Alex open-microwave HDF5 to LeRobot format.
-# Supports teleop recordings (record_demos.py) or Mimic-generated datasets (generate_dataset.py).
+# Convert the Alex DoorMan teleop HDF5 (alex_doorman_teleop env) to LeRobot format (EEF action
+# space). Same recorded fields / embodiment as alex_open_door; only the dataset paths and the
+# language instruction differ.
 #
 # Usage (inside Docker, from repo root):
 #   /isaac-sim/python.sh isaaclab_arena_gr00t/lerobot/convert_hdf5_to_lerobot.py \
-#     --yaml_file isaaclab_arena_gr00t/lerobot/config/alex_open_microwave_config.yaml
+#     --yaml_file isaaclab_arena_gr00t/lerobot/config/alex_doorman_config.yaml
 #
-# Output: <data_root>/<hdf5_stem>/lerobot/
+# Output: <data_root>/<hdf5_stem>/lerobot/  ->  /datasets/alex_doorman/lerobot/
 #
 # GR00T finetune: isaaclab_arena_gr00t/embodiments/alex/alex_data_config.py
-# Colab notebook:  isaaclab_arena_gr00t/training/alex_colab_finetune.ipynb
 
-data_root: "/datasets/alex_microwave"
+data_root: "/datasets"
 
-hdf5_name: "new_demo.hdf5"
+# The teleop recording produced by record_demos.py (--dataset_file /datasets/alex_doorman.hdf5).
+hdf5_name: "alex_doorman_all.hdf5"
 
-language_instruction: "Open the microwave."
+language_instruction: "Open the door."
 task_index: 0
 
 # HDF5 fields written by record_demos.py / generate_dataset.py + ArenaEnvRecorderManagerCfg.

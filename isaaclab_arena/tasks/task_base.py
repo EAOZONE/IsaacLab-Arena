@@ -42,6 +42,11 @@ class TaskBase(ABC):
     def get_observation_cfg(self) -> Any:
         return None
 
+    def get_mimic_subtask_obs_cfg(self) -> Any:
+        """Optional observation group of subtask-termination signals for headless (``--auto``)
+        Mimic annotation. Returns ``None`` when the task only supports manual annotation."""
+        return None
+
     def get_rewards_cfg(self) -> Any:
         return None
 

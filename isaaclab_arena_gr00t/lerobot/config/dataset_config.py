@@ -53,9 +53,9 @@ class Gr00tDatasetConfig:
         default=None,
         metadata={
             "description": (
-                "Optional [start, end]. When set, columns [start:end] of action_name_sim are written as the "
-                "action.eef_pose feature (EE wrist target poses) instead of being treated as joints. Used to "
-                "split the packed raw Pink IK `actions` (EE poses + fingers) into pose vs. joint columns."
+                "Optional [start, end]. Column slice of action_name_sim containing EE wrist target poses "
+                "(left/right pos+quat). With action_pack_eef_pose (default), these are written into the "
+                "main LeRobot `action` column; set action_pack_eef_pose: false to emit action.eef_pose instead."
             )
         },
     )
@@ -66,6 +66,16 @@ class Gr00tDatasetConfig:
                 "Optional [start, end]. When set, the joint-remap action path consumes only columns [start:end] "
                 "of action_name_sim (e.g. the finger block of the packed `actions`); action_joints_config_path "
                 "must describe exactly those columns."
+            )
+        },
+    )
+    action_pack_eef_pose: bool = field(
+        default=True,
+        metadata={
+            "description": (
+                "When true (default) and both action_eef_pose_slice and action_joint_slice are set, write a single "
+                "34-dim LeRobot `action` column [left wrist 7 | right wrist 7 | fingers 20] instead of splitting "
+                "wrist poses into a separate action.eef_pose feature."
             )
         },
     )
@@ -220,9 +230,9 @@ class Gr00tDatasetConfig:
         if "left_eef_pos" in self.hdf5_keys:
             self.lerobot_keys["obs_eef_pose"] = "observation.eef_pose"
             self.lerobot_keys["action_eef_pose"] = "action.eef_pose"
-        # Packed-action EEF split: the EE wrist poses come from a column slice of action_name_sim
-        # rather than from separate *_eef_pos/*_eef_quat datasets.
-        if self.action_eef_pose_slice is not None:
+        # Packed-action EEF: wrist poses come from a column slice of action_name_sim. When not packing
+        # into the main action column, also emit a separate action.eef_pose feature.
+        if self.action_eef_pose_slice is not None and not self.action_pack_eef_pose:
             self.lerobot_keys["action_eef_pose"] = "action.eef_pose"
         if "teleop_base_height_command" in self.hdf5_keys:
             self.lerobot_keys["teleop_base_height_command"] = "teleop.base_height_command"

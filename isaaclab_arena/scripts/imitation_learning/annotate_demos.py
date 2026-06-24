@@ -349,6 +349,8 @@ def annotate_episode_in_auto_mode(
         annotated_episode = env.recorder_manager.get_episode(0)
         subtask_term_signal_dict = annotated_episode.data["obs"]["datagen_info"]["subtask_term_signals"]
         for signal_name, signal_flags in subtask_term_signal_dict.items():
+            # EpisodeData stores each leaf as a list of per-step tensors; stack into one tensor.
+            signal_flags = torch.tensor(signal_flags, device=env.device)
             if not torch.any(signal_flags):
                 is_episode_annotated_successfully = False
                 print(f'\tDid not detect completion for the subtask "{signal_name}".')

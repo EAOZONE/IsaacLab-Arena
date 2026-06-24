@@ -3,15 +3,15 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-# Gr00tRemoteClosedloopPolicy config for the Alex ability-hands open-microwave task.
-language_instruction: "Reach out to the microwave and open it."
+# Gr00tRemoteClosedloopPolicy config for Alex ability-hands EEF policies (microwave, door, …).
+language_instruction: "Open the door."
 action_horizon: 16
 embodiment_tag: NEW_EMBODIMENT
 video_backend: decord
 modality_config_path: isaaclab_arena_gr00t/embodiments/alex/alex_data_config.py
 
 policy_joints_config_path: isaaclab_arena_gr00t/embodiments/alex/alex_gr00t_joint_space.yaml
-action_joints_config_path: isaaclab_arena_gr00t/embodiments/alex/alex_34dof_action_joint_space.yaml
+action_joints_config_path: isaaclab_arena_gr00t/embodiments/alex/alex_34dof_eef_teleop_action_joint_space.yaml
 state_joints_config_path: isaaclab_arena_gr00t/embodiments/alex/alex_49dof_joint_space.yaml
 
 action_chunk_length: 16
