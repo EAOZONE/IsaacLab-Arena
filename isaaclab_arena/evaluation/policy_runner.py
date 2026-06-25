@@ -105,8 +105,10 @@ def rollout_policy(
         episode_step = 0
 
         # Ramp the poke each episode: episode k (1-based) runs at k x the base wrench.
+        # (For a random poke the ramp is disabled; resample() draws a fresh nudge instead.)
         if perturbation is not None:
             perturbation.set_episode_scale(1.0)
+            perturbation.resample()
 
         ikstreamer_dim_mismatch_warned = [False] if ikstreamer_bridge is not None else None
 
@@ -144,9 +146,11 @@ def rollout_policy(
                     # Break if number of episodes is reached
                     completed_episodes = env_ids.shape[0] - ik_failed_ids.shape[0]
                     num_episodes_completed += completed_episodes
-                    # Ramp the poke for the upcoming episode (1-based: episode k -> k x base).
+                    # Ramp the poke for the upcoming episode (1-based: episode k -> k x base),
+                    # or draw a fresh random nudge if the poke is random.
                     if perturbation is not None:
                         perturbation.set_episode_scale(num_episodes_completed + 1)
+                        perturbation.resample()
                     if hasattr(env.unwrapped.cfg, "metrics") and env.unwrapped.cfg.metrics is not None:
                         metrics = env.unwrapped.compute_metrics()
                         tqdm.tqdm.write(
@@ -314,13 +318,22 @@ def main():
                 period=args_cli.poke_period,
                 is_global=(args_cli.poke_frame == "world"),
                 show_marker=args_cli.poke_marker,
+                random_force=args_cli.poke_random,
+                force_range=tuple(args_cli.poke_force_range),
+                seed=args_cli.poke_random_seed,
             )
+            if args_cli.poke_random:
+                force_desc = (
+                    f"random horizontal nudge, magnitude {args_cli.poke_force_range[0]}-"
+                    f"{args_cli.poke_force_range[1]} N per env/episode"
+                )
+            else:
+                force_desc = f"force={args_cli.poke_force} torque={args_cli.poke_torque} (base wrench; ramped k x on episode k)"
             print(
-                f"[Rank {local_rank}/{world_size}] Poke enabled: force={args_cli.poke_force}"
-                f" torque={args_cli.poke_torque} ({args_cli.poke_frame} frame) on {perturbation.body_names}"
+                f"[Rank {local_rank}/{world_size}] Poke enabled: {force_desc}"
+                f" ({args_cli.poke_frame} frame) on {perturbation.body_names}"
                 f" for {args_cli.poke_duration} steps starting at step {args_cli.poke_start_step}"
                 + (f", repeating every {args_cli.poke_period} steps" if args_cli.poke_period else "")
-                + " (base wrench; ramped k x on episode k)"
             )
 
         steps_str = f"{num_steps} steps" if num_steps is not None else f"{num_episodes} episodes"

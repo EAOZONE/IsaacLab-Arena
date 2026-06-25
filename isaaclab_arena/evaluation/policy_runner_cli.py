@@ -78,8 +78,8 @@ def add_policy_runner_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--poke_body",
         type=str,
-        default="RIGHT_ELBOW_Y_LINK",
-        help="Body name (or regex) the poke force is applied to. Default: RIGHT_ELBOW_Y_LINK (Alex right forearm).",
+        default="RIGHT_WRIST_X_LINK",
+        help="Body name (or regex) the poke force is applied to. Default: RIGHT_WRIST_X_LINK (Alex right wrist, most distal).",
     )
     parser.add_argument(
         "--poke_force",
@@ -127,5 +127,29 @@ def add_policy_runner_arguments(parser: argparse.ArgumentParser) -> None:
         action=argparse.BooleanOptionalAction,
         default=True,
         help="Show a red arrow at the poked link while the poke is active. Use --no-poke_marker to disable.",
+    )
+    parser.add_argument(
+        "--poke_random",
+        action="store_true",
+        default=False,
+        help=(
+            "Randomize the poke into a 'nudge': each env/episode draws a random horizontal"
+            " (world xy) direction and a magnitude from --poke_force_range. Overrides --poke_force"
+            " and disables the per-episode ramp."
+        ),
+    )
+    parser.add_argument(
+        "--poke_force_range",
+        type=float,
+        nargs=2,
+        metavar=("MIN", "MAX"),
+        default=[20.0, 45.0],
+        help="Magnitude range [N] sampled uniformly per env/episode when --poke_random. Default: 20 45.",
+    )
+    parser.add_argument(
+        "--poke_random_seed",
+        type=int,
+        default=None,
+        help="Seed for the random-poke RNG (reproducible nudges). Default: unseeded.",
     )
     add_ikstreamer_cli_args(parser)

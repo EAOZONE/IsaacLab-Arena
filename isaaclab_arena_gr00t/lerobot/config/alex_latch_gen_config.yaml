@@ -1,0 +1,66 @@
+# Copyright (c) 2025-2026, The Isaac Lab Arena Project Developers (https://github.com/isaac-sim/IsaacLab-Arena/blob/main/CONTRIBUTORS.md).
+# All rights reserved.
+#
+# SPDX-License-Identifier: Apache-2.0
+
+# Convert the merged Alex doorman latch HDF5 (latch_gen_combined.hdf5) to LeRobot format.
+# Built from the Mimic-generated push-left/push-right datasets merged via merge_demos.py.
+#
+# Usage (inside Docker, from repo root):
+#   /isaac-sim/python.sh isaaclab_arena_gr00t/lerobot/convert_hdf5_to_lerobot.py \
+#     --yaml_file isaaclab_arena_gr00t/lerobot/config/alex_latch_gen_config.yaml
+#
+# Output: /datasets/latch_gen/latch_gen_combined/lerobot/
+
+data_root: "/datasets/latch_gen"
+
+hdf5_name: "latch_gen_combined_clean.hdf5"
+
+language_instruction: "Open the door."
+task_index: 0
+
+# HDF5 fields written by record_demos.py / generate_dataset.py + ArenaEnvRecorderManagerCfg.
+state_name_sim: "robot_joint_pos"
+# EEF action: train on the raw Pink IK ``actions`` stream (EE target poses + fingers), not
+# the post-IK ``processed_actions`` joint targets. The 34-dim ``actions`` vector is sliced
+# into the wrist-pose columns and the finger-joint columns below; the wrist poses feed the
+# IK streamer at deploy (gr00t_eef_ikstream_bridge.py).
+action_name_sim: "actions"
+# actions[:, 0:14] = [left pos3 + quat4, right pos3 + quat4] (packed into LeRobot `action` [0:14]).
+action_eef_pose_slice: [0, 14]
+# actions[:, 14:34] = 20 ability-hand finger joints -> LeRobot `action` [14:34].
+action_joint_slice: [14, 34]
+# Write wrists + fingers as one 34-dim `action` column (default). Set false to split wrists into action.eef_pose.
+action_pack_eef_pose: true
+# Stereo ZED cameras recorded in HDF5 under camera_obs/.
+video_cameras:
+  zed_left_cam_rgb: observation.images.zed_left_cam
+  zed_right_cam_rgb: observation.images.zed_right_cam
+
+# LeRobot / GR00T field names.
+state_name_lerobot: "observation.state"
+action_name_lerobot: "action"
+task_description_lerobot: "annotation.human.action.task_description"
+
+chunks_size: 1000
+fps: 30
+
+data_path: "data/chunk-{episode_chunk:03d}/episode_{episode_index:06d}.parquet"
+video_path: "videos/chunk-{episode_chunk:03d}/{video_key}/episode_{episode_index:06d}.mp4"
+
+modality_template_path: "isaaclab_arena_gr00t/embodiments/alex/modality.json"
+modality_fname: "modality.json"
+episodes_fname: "episodes.jsonl"
+tasks_fname: "tasks.jsonl"
+info_template_path: "isaaclab_arena_gr00t/embodiments/alex/info.json"
+info_fname: "info.json"
+
+policy_joints_config_path: "isaaclab_arena_gr00t/embodiments/alex/alex_gr00t_joint_space.yaml"
+robot_type: "alex_ability_hands"
+
+state_joints_config_path: "isaaclab_arena_gr00t/embodiments/alex/alex_49dof_joint_space.yaml"
+# Describes only the 20 finger joints of actions[:, 14:34] (the EE-pose columns are not joints).
+action_joints_config_path: "isaaclab_arena_gr00t/embodiments/alex/alex_20dof_hand_action_joint_space.yaml"
+
+original_image_size: [480, 640, 3]
+target_image_size: [480, 640, 3]

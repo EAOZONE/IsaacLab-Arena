@@ -96,3 +96,4 @@ isaaclab_arena/assets/viral/usd/
 
 # DoorMan generated door assets (scripts/doorman_gen/generate_doors.py)
 isaaclab_arena/assets/doorman_doors/usd/
+isaaclab_arena/assets/doorman*
