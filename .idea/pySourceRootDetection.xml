@@ -4,6 +4,7 @@
     <option name="sourcePathsSet">
       <set>
         <option value="$PROJECT_DIR$/submodules/IsaacLab/source/isaaclab" />
+        <option value="$PROJECT_DIR$/submodules/Isaac-GR00T" />
       </set>
     </option>
   </component>
