@@ -25,13 +25,14 @@ Record timed mocap takes::
         --teleop_device captury \\
         --embodiment alex_v2_ability_hands
 
-Free-play teleop (no recording)::
+Free-play teleop with RL standing lower body (WBC embodiment)::
 
-    CAPTURY_HOST=<ip> /isaac-sim/python.sh isaaclab_arena/scripts/imitation_learning/teleop.py \\
+    /isaac-sim/python.sh isaaclab_arena/scripts/imitation_learning/teleop.py \\
         --device cuda --viz kit \\
         alex_teleop_sandbox \\
-        --teleop_device captury \\
-        --embodiment alex_v2_ability_hands
+        --teleop_device openxr \\
+        --embodiment alex_wbc_ability_hands \\
+        --standing_model_path logs/rsl_rl/alex_standing_balance/<timestamp>/model_2999.pt
 """
 
 from __future__ import annotations
@@ -52,9 +53,13 @@ _VALID_ALEX_EMBODIMENTS = (
     "alex_pink",
     "alex_ability_hands",
     "alex_ability_hands_joint_pos",
+    "alex_wbc_pink",
+    "alex_wbc_ability_hands",
     "alex_v2_pink",
     "alex_v2_ability_hands",
     "alex_v2_ability_hands_joint_pos",
+    "alex_v2_wbc_pink",
+    "alex_v2_wbc_ability_hands",
 )
 
 
@@ -68,6 +73,7 @@ class AlexTeleopSandboxEnvironment(ExampleEnvironmentBase):
         from isaaclab_arena.environments.isaaclab_arena_environment import IsaacLabArenaEnvironment
         from isaaclab_arena.scene.scene import Scene
         from isaaclab_arena.utils.pose import Pose
+        from isaaclab_arena_alex.embodiments.alex_wbc_cli import build_alex_embodiment
 
         assert args_cli.embodiment in _VALID_ALEX_EMBODIMENTS, (
             f"Invalid Alex embodiment {args_cli.embodiment}; choose one of {_VALID_ALEX_EMBODIMENTS}"
@@ -75,7 +81,7 @@ class AlexTeleopSandboxEnvironment(ExampleEnvironmentBase):
 
         background = self.asset_registry.get_asset_by_name(args_cli.background)()
 
-        embodiment = self.asset_registry.get_asset_by_name(args_cli.embodiment)(enable_cameras=args_cli.enable_cameras)
+        embodiment = build_alex_embodiment(self.asset_registry, args_cli)
         spawn_xyz, spawn_rot = _ALEX_SPAWN_POSE
         embodiment.set_initial_pose(Pose(position_xyz=spawn_xyz, rotation_xyzw=spawn_rot))
 
@@ -92,6 +98,8 @@ class AlexTeleopSandboxEnvironment(ExampleEnvironmentBase):
 
     @staticmethod
     def add_cli_args(parser: argparse.ArgumentParser) -> None:
+        from isaaclab_arena_alex.embodiments.alex_wbc_cli import add_alex_standing_wbc_cli_args
+
         parser.add_argument("--teleop_device", type=str, default=None, help="e.g. captury or openxr")
         parser.add_argument("--embodiment", type=str, default="alex_v2_ability_hands")
         parser.add_argument(
@@ -100,3 +108,4 @@ class AlexTeleopSandboxEnvironment(ExampleEnvironmentBase):
             default="ground_plane",
             help="Background asset (default ground_plane; try packing_table or kitchen for a table surface).",
         )
+        add_alex_standing_wbc_cli_args(parser)

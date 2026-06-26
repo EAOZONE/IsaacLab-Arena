@@ -49,6 +49,16 @@ from isaaclab_arena.embodiments.common.pink_ik_failure_tracking import IKFailure
 from isaaclab_arena.embodiments.embodiment_base import EmbodimentBase
 from isaaclab_arena.terms.events import reset_all_articulation_joints
 from isaaclab_arena.utils.pose import Pose
+from isaaclab_arena_alex.alex_env.mdp import alex_events as alex_wbc_events_mdp
+from isaaclab_arena_alex.alex_env.mdp.actions.alex_standing_lower_body_action_cfg import (
+    AlexStandingLowerBodyActionCfg,
+)
+from isaaclab_arena_alex.alex_whole_body_controller.wbc_policy.policy.alex_constants import (
+    ALEX_STANDING_FULL_JOINT_POS,
+    ALEX_STANDING_NOMINAL_JOINT_POS,
+    ALEX_STANDING_TARGET_HEIGHT,
+)
+from isaaclab_arena_alex.embodiments.alex_wbc_cli import apply_standing_wbc_to_action_config
 
 # ---------------------------------------------------------------------------
 # Paths
@@ -900,6 +910,40 @@ def _configure_ability_hand_robot(
         "LEFT_ELBOW_Y": -1.5708,
         "RIGHT_ELBOW_Y": -1.5708,
         **_ABILITY_HAND_DEFAULT_JOINT_POS,
+        **ALEX_STANDING_NOMINAL_JOINT_POS,
+    }
+    return robot_cfg, resolved_urdf, pink_ik_urdf
+
+
+def _configure_wbc_ability_hand_robot(robot_version: str) -> tuple[ArticulationCfg, str, str]:
+    """Build a floating-base Alex cfg for WBC teleop (arms via Pink IK, legs via standing controller)."""
+    robot_cfg, resolved_urdf, pink_ik_urdf = _configure_ability_hand_robot(robot_version, teleop=False)
+    robot_cfg.spawn.fix_base = False
+    _configure_teleop_arm_actuators(robot_cfg, include_wrists=True)
+    return robot_cfg, resolved_urdf, pink_ik_urdf
+
+
+def _configure_wbc_nubs_robot(robot_version: str) -> tuple[ArticulationCfg, str, str]:
+    """Build a floating-base nubs Alex cfg for WBC teleop."""
+    paths = _alex_arena_urdf_paths(robot_version)
+    merged_urdf = merge_urdfs(
+        robot_version,
+        ALEX_NUBFOREARMS_PARTS,
+        output_name=f"alex_{robot_version.lower()}_nubs_arena",
+    )
+    resolved_urdf = _resolve_mesh_paths(merged_urdf, paths["nubs_resolved"], robot_version)
+    pink_ik_urdf = _strip_collisions_for_pink_ik(resolved_urdf, paths["nubs_pink_ik"])
+
+    robot_cfg = _default_nubs_cfg(robot_version)
+    robot_cfg.prim_path = "{ENV_REGEX_NS}/Robot"
+    robot_cfg.spawn.asset_path = resolved_urdf
+    robot_cfg.spawn.fix_base = False
+    robot_cfg.soft_joint_pos_limit_factor = 1.0
+    _configure_teleop_arm_actuators(robot_cfg, include_wrists=False)
+    robot_cfg.init_state.joint_pos = {
+        "LEFT_ELBOW_Y": -1.5708,
+        "RIGHT_ELBOW_Y": -1.5708,
+        **ALEX_STANDING_FULL_JOINT_POS,
     }
     return robot_cfg, resolved_urdf, pink_ik_urdf
 
@@ -1669,6 +1713,101 @@ class AlexAbilityHandMimicEnv(AlexMimicEnv):
 
 
 @configclass
+class AlexWBCAbilityHandActionsCfg:
+    """Pink IK wrists + classical lower-body standing controller (floating pelvis)."""
+
+    upper_body_ik = PinkInverseKinematicsActionCfg(
+        class_type=IKFailureTrackingPinkInverseKinematicsAction,
+        pink_controlled_joint_names=ARM_WRIST_JOINT_NAMES_LIST,
+        hand_joint_names=ABILITY_HAND_TELEOP_JOINT_ORDER,
+        target_eef_link_names={
+            "left": "LEFT_GRIPPER_Z_LINK",
+            "right": "RIGHT_GRIPPER_Z_LINK",
+        },
+        asset_name="robot",
+        controller=PinkIKControllerCfg(
+            articulation_name="robot",
+            base_link_name="PELVIS_LINK",
+            num_hand_joints=len(ABILITY_HAND_TELEOP_JOINT_ORDER),
+            show_ik_warnings=True,
+            fail_on_joint_limit_violation=False,
+            variable_input_tasks=[
+                LocalFrameTaskCfg(
+                    frame="LEFT_GRIPPER_Z_LINK",
+                    base_link_frame_name="PELVIS_LINK",
+                    position_cost=8.0,
+                    orientation_cost=1.0,
+                    lm_damping=10,
+                    gain=0.5,
+                ),
+                LocalFrameTaskCfg(
+                    frame="RIGHT_GRIPPER_Z_LINK",
+                    base_link_frame_name="PELVIS_LINK",
+                    position_cost=8.0,
+                    orientation_cost=1.0,
+                    lm_damping=10,
+                    gain=0.5,
+                ),
+                DampingTaskCfg(cost=0.5),
+                NullSpacePostureTaskCfg(cost=0.5),
+            ],
+        ),
+    )
+    lower_body_standing = AlexStandingLowerBodyActionCfg(asset_name="robot")
+
+
+@configclass
+class AlexWBCPinkActionsCfg:
+    """Pink IK elbows + classical lower-body standing controller (floating pelvis)."""
+
+    upper_body_ik = PinkInverseKinematicsActionCfg(
+        class_type=IKFailureTrackingPinkInverseKinematicsAction,
+        pink_controlled_joint_names=ARM_JOINT_NAMES_LIST,
+        hand_joint_names=[],
+        target_eef_link_names={
+            "left": "LEFT_ELBOW_Y_LINK",
+            "right": "RIGHT_ELBOW_Y_LINK",
+        },
+        asset_name="robot",
+        controller=PinkIKControllerCfg(
+            articulation_name="robot",
+            base_link_name="PELVIS_LINK",
+            num_hand_joints=0,
+            show_ik_warnings=True,
+            fail_on_joint_limit_violation=False,
+            variable_input_tasks=[
+                LocalFrameTaskCfg(
+                    frame="LEFT_ELBOW_Y_LINK",
+                    base_link_frame_name="PELVIS_LINK",
+                    position_cost=8.0,
+                    orientation_cost=1.0,
+                    lm_damping=75,
+                    gain=0.075,
+                ),
+                LocalFrameTaskCfg(
+                    frame="RIGHT_ELBOW_Y_LINK",
+                    base_link_frame_name="PELVIS_LINK",
+                    position_cost=8.0,
+                    orientation_cost=1.0,
+                    lm_damping=75,
+                    gain=0.075,
+                ),
+                DampingTaskCfg(cost=0.5),
+                NullSpacePostureTaskCfg(cost=0.5),
+            ],
+        ),
+    )
+    lower_body_standing = AlexStandingLowerBodyActionCfg(asset_name="robot")
+
+
+@configclass
+class AlexWBCEventCfg(AlexEventCfg):
+    """Event configuration for Alex WBC embodiments."""
+
+    reset_standing_policy = EventTerm(func=alex_wbc_events_mdp.reset_standing_lower_body_policy, mode="reset")
+
+
+@configclass
 class AlexAbilityHandActionsCfg:
     """Action configuration for Alex with Psyonic Ability Hands — PINK IK wrist control."""
 
@@ -1932,6 +2071,112 @@ class AlexV2AbilityHandEmbodiment(AlexAbilityHandEmbodiment):
     """Embodiment for the IHMC Alex V2 robot with Psyonic Ability Hands and PINK IK wrist control."""
 
     name = "alex_v2_ability_hands"
+    robot_version = ALEX_V2
+
+
+@register_asset
+class AlexWBCAbilityHandEmbodiment(AlexAbilityHandEmbodiment):
+    """Alex with Ability Hands, floating pelvis, and a lower-body standing controller.
+
+    Upper body uses the same Pink IK wrist teleop interface as :class:`AlexAbilityHandEmbodiment`.
+    Lower body is stabilized by :class:`~isaaclab_arena_alex.alex_env.mdp.actions.alex_standing_lower_body_action.AlexStandingLowerBodyAction`
+    (classical PD by default; pass ``standing_wbc_version='rl'`` and ``standing_model_path`` for RL).
+    """
+
+    name = "alex_wbc_ability_hands"
+
+    def __init__(
+        self,
+        enable_cameras: bool = False,
+        initial_pose: Pose | None = None,
+        use_tiled_camera: bool = False,
+        standing_wbc_version: str | None = None,
+        standing_model_path: str | None = None,
+    ):
+        EmbodimentBase.__init__(self, enable_cameras, initial_pose)
+
+        robot_cfg, _resolved_urdf, pink_ik_urdf = _configure_wbc_ability_hand_robot(self.robot_version)
+
+        self.scene_config = AlexSceneCfg()
+        self.scene_config.robot = robot_cfg
+
+        self.action_config = AlexWBCAbilityHandActionsCfg()
+        apply_standing_wbc_to_action_config(
+            self.action_config,
+            standing_wbc_version=standing_wbc_version,
+            standing_model_path=standing_model_path,
+        )
+        self.action_config.upper_body_ik.controller.urdf_path = pink_ik_urdf
+        self.action_config.upper_body_ik.controller.mesh_path = None
+
+        self.observation_config = AlexAbilityHandObservationsCfg()
+        self.observation_config.policy.concatenate_terms = self.concatenate_observation_terms
+        self.event_config = AlexWBCEventCfg()
+        _configure_camera_events(self.event_config, enable_cameras)
+        self.mimic_env = AlexAbilityHandMimicEnv
+        self.camera_config = AlexCameraCfg()
+        self.camera_config._use_tiled_camera = use_tiled_camera
+        self.camera_config.__post_init__()
+
+        self._assign_xr_cfg()
+
+
+@register_asset
+class AlexV2WBCAbilityHandEmbodiment(AlexWBCAbilityHandEmbodiment):
+    """Alex V2 with Ability Hands and lower-body standing WBC."""
+
+    name = "alex_v2_wbc_ability_hands"
+    robot_version = ALEX_V2
+
+
+@register_asset
+class AlexWBCPinkEmbodiment(AlexTeleopEmbodimentMixin, EmbodimentBase):
+    """Alex nubs with Pink IK elbows and lower-body standing WBC (floating pelvis)."""
+
+    name = "alex_wbc_pink"
+    default_arm_mode = ArmMode.RIGHT
+    robot_version = ALEX_V1
+
+    def __init__(
+        self,
+        enable_cameras: bool = False,
+        initial_pose: Pose | None = None,
+        use_tiled_camera: bool = False,
+        standing_wbc_version: str | None = None,
+        standing_model_path: str | None = None,
+    ):
+        super().__init__(enable_cameras, initial_pose)
+
+        robot_cfg, resolved_urdf, pink_ik_urdf = _configure_wbc_nubs_robot(self.robot_version)
+
+        self.scene_config = AlexSceneCfg()
+        self.scene_config.robot = robot_cfg
+
+        self.action_config = AlexWBCPinkActionsCfg()
+        apply_standing_wbc_to_action_config(
+            self.action_config,
+            standing_wbc_version=standing_wbc_version,
+            standing_model_path=standing_model_path,
+        )
+        self.action_config.upper_body_ik.controller.urdf_path = pink_ik_urdf
+        self.action_config.upper_body_ik.controller.mesh_path = _ALEX_MODELS_DIR
+
+        self.observation_config = AlexObservationsCfg()
+        self.observation_config.policy.concatenate_terms = self.concatenate_observation_terms
+        self.event_config = AlexWBCEventCfg()
+        _configure_camera_events(self.event_config, enable_cameras)
+        self.camera_config = AlexCameraCfg()
+        self.camera_config._use_tiled_camera = use_tiled_camera
+        self.camera_config.__post_init__()
+
+        self._assign_xr_cfg()
+
+
+@register_asset
+class AlexV2WBCPinkEmbodiment(AlexWBCPinkEmbodiment):
+    """Alex V2 nubs with Pink IK elbows and lower-body standing WBC."""
+
+    name = "alex_v2_wbc_pink"
     robot_version = ALEX_V2
 
 
