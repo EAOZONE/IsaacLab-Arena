@@ -11,7 +11,6 @@ is the URDF / physics setup, not OpenXR retargeting.
 Run inside the container:
 
     /isaac-sim/python.sh tools/debug_alex_fly_away.py --embodiment alex_v2_ability_hands
-    /isaac-sim/python.sh tools/debug_alex_fly_away.py --embodiment alex_v2_wbc_ability_hands
 """
 
 from isaaclab.app import AppLauncher

@@ -8,7 +8,6 @@ from .alex.alex import *
 from .droid.droid import *
 from .franka.franka import *
 from .g1.g1 import *
-from isaaclab_arena_alex.embodiments.alex_standing_rl import *  # noqa: F401, F403
 from .galbot.galbot import *
 from .gr1t2.gr1t2 import *
 from .kuka_allegro.kuka_allegro import *

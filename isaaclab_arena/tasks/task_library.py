@@ -22,5 +22,4 @@ from isaaclab_arena.tasks import (  # noqa: F401
     sequential_task_base,
     sorting_task,
     turn_knob_task,
-    alex_standing_balance_task,
 )

@@ -73,13 +73,9 @@ _VALID_ALEX_EMBODIMENTS = (
     "alex_pink",
     "alex_ability_hands",
     "alex_ability_hands_joint_pos",
-    "alex_wbc_pink",
-    "alex_wbc_ability_hands",
     "alex_v2_pink",
     "alex_v2_ability_hands",
     "alex_v2_ability_hands_joint_pos",
-    "alex_v2_wbc_pink",
-    "alex_v2_wbc_ability_hands",
 )
 
 
@@ -97,7 +93,6 @@ class AlexDoormanTeleopEnvironment(ExampleEnvironmentBase):
         from isaaclab_arena.scene.scene import Scene
         from isaaclab_arena.tasks.open_door_task import OpenDoorTask
         from isaaclab_arena.utils.pose import Pose
-        from isaaclab_arena_alex.embodiments.alex_wbc_cli import build_alex_embodiment
 
         assert args_cli.embodiment in _VALID_ALEX_EMBODIMENTS, (
             f"Invalid Alex embodiment {args_cli.embodiment}; choose one of {_VALID_ALEX_EMBODIMENTS}"
@@ -128,7 +123,7 @@ class AlexDoormanTeleopEnvironment(ExampleEnvironmentBase):
         ground_plane = self.asset_registry.get_asset_by_name("ground_plane")()
         light = self.asset_registry.get_asset_by_name("light")()
 
-        embodiment = build_alex_embodiment(self.asset_registry, args_cli)
+        embodiment = self.asset_registry.get_asset_by_name(args_cli.embodiment)(enable_cameras=args_cli.enable_cameras)
         embodiment.set_initial_pose(Pose(position_xyz=_ALEX_SPAWN_POSE[0], rotation_xyzw=_ALEX_SPAWN_POSE[1]))
 
         # Placement jitter DR: offset the base door pose by a small seeded xy/yaw wobble.
@@ -180,9 +175,6 @@ class AlexDoormanTeleopEnvironment(ExampleEnvironmentBase):
         parser.add_argument("--seed", type=int, default=0, help="Seed for door selection + placement jitter.")
         parser.add_argument("--teleop_device", type=str, default=None, help="e.g. captury or openxr")
         parser.add_argument("--embodiment", type=str, default="alex_v2_ability_hands")
-        from isaaclab_arena_alex.embodiments.alex_wbc_cli import add_alex_standing_wbc_cli_args
-
-        add_alex_standing_wbc_cli_args(parser)
         parser.add_argument(
             "--fail_on_ik_error",
             action="store_true",
