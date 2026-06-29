@@ -30,6 +30,12 @@ from isaaclab_arena_gr00t.policy.gr00t_core import (
     extract_obs_numpy_from_torch,
     load_gr00t_joint_configs,
 )
+from isaaclab_arena_gr00t.streaming.gr00t_eef_ikstream_bridge import (
+    IKStreamerBridge,
+    add_ikstreamer_cli_args,
+    create_ikstreamer_bridge_from_args,
+    stream_env_action_to_ikstreamer,
+)
 from isaaclab_arena_gr00t.utils.io_utils import create_config_from_yaml, load_gr00t_modality_config_from_file
 
 
@@ -47,6 +53,11 @@ class Gr00tRemoteClosedloopPolicyArgs(Gr00tBasePolicyArgs):
     remote_host: str = field(default="localhost", metadata={"help": "GR00T policy server hostname"})
     remote_port: int = field(default=5555, metadata={"help": "GR00T policy server port"})
     remote_api_token: str | None = field(default=None, metadata={"help": "API token for the policy server"})
+    stream_ikstreamer: bool = field(default=False, metadata={"help": "Mirror actions to RDX IK streamer"})
+    ikstreamer_host: str = field(default="127.0.0.1", metadata={"help": "RDX IK streamer host"})
+    ikstreamer_port: int = field(default=2102, metadata={"help": "RDX IK streamer port"})
+    debug_ikstreamer: bool = field(default=False, metadata={"help": "Print streamed poses to console"})
+    ikstreamer_yaw_offset: float = field(default=0.0, metadata={"help": "Yaw offset for streamed poses"})
 
     @classmethod
     def from_cli_args(cls, args: argparse.Namespace) -> Gr00tRemoteClosedloopPolicyArgs:
@@ -58,6 +69,11 @@ class Gr00tRemoteClosedloopPolicyArgs(Gr00tBasePolicyArgs):
             remote_host=args.remote_host,
             remote_port=args.remote_port,
             remote_api_token=getattr(args, "remote_api_token", None),
+            stream_ikstreamer=getattr(args, "stream_ikstreamer", False),
+            ikstreamer_host=getattr(args, "ikstreamer_host", "127.0.0.1"),
+            ikstreamer_port=getattr(args, "ikstreamer_port", 2102),
+            debug_ikstreamer=getattr(args, "debug_ikstreamer", False),
+            ikstreamer_yaw_offset=getattr(args, "ikstreamer_yaw_offset", 0.0),
         )
 
 
@@ -126,6 +142,10 @@ class Gr00tRemoteClosedloopPolicy(PolicyBase):
 
         self.task_description: str | None = None
 
+        # Optional RDX IK streamer
+        self._ikstreamer_bridge: IKStreamerBridge | None = create_ikstreamer_bridge_from_args(config)
+        self._ikstreamer_dim_mismatch_warned = [False]
+
     # ---------------------- CLI helpers -------------------
 
     @staticmethod
@@ -149,6 +169,7 @@ class Gr00tRemoteClosedloopPolicy(PolicyBase):
         group.add_argument("--remote_host", type=str, default="localhost", help="GR00T policy server hostname")
         group.add_argument("--remote_port", type=int, default=5555, help="GR00T policy server port")
         group.add_argument("--remote_api_token", type=str, default=None, help="API token for the policy server")
+        add_ikstreamer_cli_args(parser)
         group.add_argument(
             "--scheduler",
             type=str,
@@ -191,10 +212,21 @@ class Gr00tRemoteClosedloopPolicy(PolicyBase):
         def fetch_chunk() -> torch.Tensor:
             return self._get_action_chunk(observation, self.policy_config.pov_cam_name_sim)
 
-        return self._chunking_state.get_action(
+        actions = self._chunking_state.get_action(
             fetch_chunk,
             hold_action=self._extract_hold_action(observation),
         )
+
+        if self._ikstreamer_bridge is not None:
+            stream_env_action_to_ikstreamer(
+                self._ikstreamer_bridge,
+                actions,
+                env=env,
+                env_index=0,
+                dim_mismatch_warned=self._ikstreamer_dim_mismatch_warned,
+            )
+
+        return actions
 
     def _extract_hold_action(self, observation: dict[str, Any]) -> torch.Tensor:
         """Build the action vector that waiting envs should hold: their current sim joint positions
@@ -257,6 +289,10 @@ class Gr00tRemoteClosedloopPolicy(PolicyBase):
 
     def close(self) -> None:
         """Release Arena-side resources for the remote GR00T policy client."""
+        if self._ikstreamer_bridge is not None:
+            self._ikstreamer_bridge.close()
+            self._ikstreamer_bridge = None
+
         client = self._client
         try:
             if client is not None:

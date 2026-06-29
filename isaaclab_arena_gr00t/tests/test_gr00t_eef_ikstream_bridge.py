@@ -19,9 +19,11 @@ from isaaclab_arena_gr00t.streaming.gr00t_eef_ikstream_bridge import (
     Segment,
     SegmentPose,
     IKStreamerBridge,
+    add_ikstreamer_cli_args,
     create_ikstreamer_bridge_from_args,
     encode_pose_packet,
     split_gr00t_action,
+    world_wrist_pose_to_base_frame,
 )
 
 _SEGMENT_ORDER = (Segment.LEFT_HAND, Segment.RIGHT_HAND, Segment.HEAD, Segment.CHEST)
@@ -117,6 +119,15 @@ def test_factory_returns_none_without_flag():
     assert create_ikstreamer_bridge_from_args(args) is None
 
 
+def test_add_ikstreamer_cli_args_is_idempotent():
+    parser = argparse.ArgumentParser()
+    add_ikstreamer_cli_args(parser)
+    add_ikstreamer_cli_args(parser)
+    args = parser.parse_args(["--stream_ikstreamer", "--ikstreamer_port", "2200"])
+    assert args.stream_ikstreamer is True
+    assert args.ikstreamer_port == 2200
+
+
 def test_split_gr00t_action():
     action = np.arange(34, dtype=np.float32)
     left, right, hands = split_gr00t_action(action)
@@ -124,6 +135,53 @@ def test_split_gr00t_action():
     np.testing.assert_array_equal(right, np.arange(7, 14))
     np.testing.assert_array_equal(hands, np.arange(14, 34))
     assert hands.shape == (20,)
+
+
+def test_world_to_base_identity_base_is_passthrough():
+    # Base at the origin with identity orientation -> pelvis frame == world frame.
+    pose = np.array([0.886, 0.462, 0.671, 0.326, -0.124, 0.837, 0.268], dtype=np.float32)
+    out = world_wrist_pose_to_base_frame(pose, base_pos=np.zeros(3), base_quat_xyzw=[0, 0, 0, 1])
+    np.testing.assert_allclose(out, pose, atol=1e-6)
+
+
+def test_world_to_base_translation_only():
+    # Pure base translation just shifts the position; orientation is unchanged.
+    pose = np.array([0.2, -0.1, 1.15, 0, 0, 0, 1], dtype=np.float32)
+    out = world_wrist_pose_to_base_frame(pose, base_pos=[0.9, 0.17, 0.94], base_quat_xyzw=[0, 0, 0, 1])
+    np.testing.assert_allclose(out[:3], [0.2 - 0.9, -0.1 - 0.17, 1.15 - 0.94], atol=1e-6)
+    np.testing.assert_allclose(out[3:7], [0, 0, 0, 1], atol=1e-6)
+
+
+def test_world_to_base_180_yaw_matches_doorman_spawn():
+    # Doorman spawn is a 180 deg yaw about Z: base_quat xyzw = (0, 0, 1, 0).
+    # A hand 0.2 m in front of the pelvis (world +x relative) ends up behind in pelvis x.
+    base_pos = np.array([0.9, 0.17, 0.94])
+    base_quat = np.array([0.0, 0.0, 1.0, 0.0])  # 180 deg about Z
+    pose = np.array([1.1, 0.17, 1.14, 0, 0, 0, 1], dtype=np.float32)  # +0.2 x, +0.2 z in world
+    out = world_wrist_pose_to_base_frame(pose, base_pos, base_quat)
+    # 180 deg yaw flips x and y of the relative position; z is preserved.
+    np.testing.assert_allclose(out[:3], [-0.2, 0.0, 0.2], atol=1e-6)
+
+
+def test_world_to_base_roundtrip_recovers_world():
+    rng = np.random.default_rng(0)
+    pose = np.concatenate([rng.normal(size=3), _normalize(rng.normal(size=4))]).astype(np.float32)
+    base_pos = rng.normal(size=3)
+    base_quat = _normalize(rng.normal(size=4))
+    rel = world_wrist_pose_to_base_frame(pose, base_pos, base_quat)
+    # Re-composing base * rel should recover the original world pose.
+    from isaaclab_arena_gr00t.streaming.gr00t_eef_ikstream_bridge import _quat_mul_xyzw, _quat_rotate_xyzw
+
+    world_pos = _quat_rotate_xyzw(base_quat, rel[:3].astype(np.float64)) + base_pos
+    world_quat = _quat_mul_xyzw(base_quat, rel[3:7].astype(np.float64))
+    np.testing.assert_allclose(world_pos, pose[:3], atol=1e-5)
+    # Quaternions equal up to sign.
+    assert np.allclose(world_quat, pose[3:7], atol=1e-5) or np.allclose(-world_quat, pose[3:7], atol=1e-5)
+
+
+def _normalize(v):
+    v = np.asarray(v, dtype=np.float64)
+    return v / np.linalg.norm(v)
 
 
 def test_bridge_sends_over_udp_loopback():

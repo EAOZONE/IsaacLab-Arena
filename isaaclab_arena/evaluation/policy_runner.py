@@ -112,6 +112,11 @@ def rollout_policy(
 
         ikstreamer_dim_mismatch_warned = [False] if ikstreamer_bridge is not None else None
 
+        # Determine if we should stream to IK streamer.
+        # If the policy has its own bridge, it handles it internally in get_action.
+        # Otherwise, we handle it here in the rollout loop.
+        policy_has_bridge = hasattr(policy, "_ikstreamer_bridge")
+
         while True:
             with torch.inference_mode():
                 actions = policy.get_action(env, obs)
@@ -120,12 +125,13 @@ def rollout_policy(
                 obs, _, terminated, truncated, _ = env.step(actions)
                 episode_step += 1
 
-                if ikstreamer_bridge is not None:
+                if ikstreamer_bridge is not None and not policy_has_bridge:
                     from isaaclab_arena_gr00t.streaming.gr00t_eef_ikstream_bridge import stream_env_action_to_ikstreamer
 
                     stream_env_action_to_ikstreamer(
                         ikstreamer_bridge,
                         actions,
+                        env=env,
                         dim_mismatch_warned=ikstreamer_dim_mismatch_warned,
                     )
 
@@ -341,9 +347,13 @@ def main():
 
         ikstreamer_bridge = None
         try:
-            from isaaclab_arena_gr00t.streaming.gr00t_eef_ikstream_bridge import create_ikstreamer_bridge_from_args
+            # NOTE: Gr00tRemoteClosedloopPolicy now handles its own streaming if enabled via CLI args.
+            # We only create a bridge here if the policy DOES NOT handle it (e.g. for other policy types).
+            if not hasattr(policy, "_ikstreamer_bridge"):
+                from isaaclab_arena_gr00t.streaming.gr00t_eef_ikstream_bridge import create_ikstreamer_bridge_from_args
 
-            ikstreamer_bridge = create_ikstreamer_bridge_from_args(args_cli)
+                ikstreamer_bridge = create_ikstreamer_bridge_from_args(args_cli)
+
             metrics = rollout_policy(
                 env,
                 policy,
