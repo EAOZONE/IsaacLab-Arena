@@ -38,11 +38,6 @@ from isaaclab_teleop import XrCfg
 from isaaclab_teleop.xr_cfg import XrAnchorRotationMode
 
 from isaaclab_arena.assets.register import register_asset
-from isaaclab_arena.embodiments.alex.ability_hand_urdf import (
-    detect_package_layout,
-    ensure_arena_hand_urdf,
-    resolve_models_dir,
-)
 from isaaclab_arena.embodiments.common.arm_mode import ArmMode
 from isaaclab_arena.embodiments.common.mimic_utils import get_rigid_and_articulated_object_poses
 from isaaclab_arena.embodiments.common.pink_ik_failure_tracking import IKFailureTrackingPinkInverseKinematicsAction
@@ -54,11 +49,9 @@ from isaaclab_arena.utils.pose import Pose
 # Paths
 #
 # Alex models (``alex_V1_description/``, ``alex_V2_description/``):
-#   Option A (recommended): mount the ihmc-alex-sdk *root* for Alex models:
+#   Option A (recommended for ability hands): mount the ihmc-alex-sdk *root*:
 #       ./docker/run_docker.sh -m /path/to/ihmc-alex-sdk
-#     Also clone ability-hand-ros2 alongside for official Psyonic hands (preferred):
-#       <sdk-root>/ability-hand-ros2/src/ah_urdf
-#     Legacy hands still resolve from ``<sdk-root>/alex-ros2/ihmc_hands_ros2`` if Psyonic is absent.
+#     Auto-detects ``/models/alex-models`` and ``/models/alex-ros2/ihmc_hands_ros2``.
 #   Option B: mount alex-models alone:
 #       ./docker/run_docker.sh -m /path/to/ihmc-alex-sdk/alex-models
 #     Lands at ``/models`` inside the container.
@@ -68,14 +61,11 @@ from isaaclab_arena.utils.pose import Pose
 # cycloidal arms), so the mounted alex-models tree must contain *both* description
 # packages when using V2.
 #
-# Ability Hand models — official Psyonic (preferred) or legacy IHMC fork:
-#   Official (ability-hand-ros2):
-#       export ABILITY_HAND_MODELS_DIR=/path/to/ability-hand-ros2/src/ah_urdf
-#     Or mount alongside ihmc-alex-sdk: <sdk-root>/ability-hand-ros2/src/ah_urdf
-#   Legacy (ihmc_hands_ros2):
-#     Auto-detected from ihmc-alex-sdk at ``<sdk-root>/alex-ros2/ihmc_hands_ros2``.
-#     Set ``ABILITY_HAND_MODELS_DIR`` to override.
+# Ability Hand models (``ihmc_hands_ros2`` package):
+#   Resolved automatically when the SDK root is mounted (Option A).
+#   Otherwise set ``ABILITY_HAND_MODELS_DIR`` to the mounted hands package root.
 # ---------------------------------------------------------------------------
+_ABILITY_HAND_LEFT_URDF = os.path.join("urdf", "abilityHand", "ability_hand_left_large.urdf")
 
 
 def _has_alex_description(models_dir: str, robot_version: str) -> bool:
@@ -133,14 +123,22 @@ def _mesh_path_replacements() -> dict[str, str]:
         for version in (ALEX_V1, ALEX_V2)
     }
     replacements["package://abilityHand/"] = os.path.join(_ABILITY_HAND_MODELS_DIR, "meshes", "abilityHand") + "/"
-    psyonic_models = os.path.join(_ABILITY_HAND_MODELS_DIR, "models")
-    if os.path.isdir(psyonic_models):
-        replacements["package://ah_urdf/models/"] = psyonic_models + "/"
     return replacements
 
 
 def _resolve_ability_hand_models_dir(alex_models_dir: str) -> str:
-    return resolve_models_dir(alex_models_dir)
+    if explicit := os.environ.get("ABILITY_HAND_MODELS_DIR"):
+        return explicit
+    sdk_root = os.path.dirname(alex_models_dir)
+    candidates = [
+        os.path.join(sdk_root, "alex-ros2", "ihmc_hands_ros2"),
+        "/ihmc_hands_ros2",
+    ]
+    for candidate in candidates:
+        root = os.path.normpath(candidate)
+        if os.path.isfile(os.path.join(root, _ABILITY_HAND_LEFT_URDF)):
+            return root
+    return os.path.normpath(candidates[0])
 
 
 _ALEX_MODELS_DIR = _resolve_alex_models_dir()
@@ -741,15 +739,6 @@ def build_alex_ability_hand_teleop_action_order() -> list[str]:
         + ABILITY_HAND_TELEOP_JOINT_ORDER
     )
 
-def _arena_hand_urdf_path(side: str, robot_version: str) -> str:
-    """IHMC-compatible hand URDF for merge / dex-retargeting (Psyonic sources are converted)."""
-    return ensure_arena_hand_urdf(
-        _ABILITY_HAND_MODELS_DIR,
-        side,
-        _alex_urdf_dir(robot_version),
-    )
-
-
 def _merge_ability_hands_urdf(robot_version: str) -> str:
     """Assemble Alex with cycloidal forearms and Psyonic Ability Hands."""
     from lxml import etree
@@ -772,16 +761,15 @@ def _merge_ability_hands_urdf(robot_version: str) -> str:
             for collision in link.findall("collision"):
                 link.remove(collision)
 
-    hand_urdf_names = ["ability_hand_left_large.urdf", "ability_hand_right_large.urdf"]
-    for hand_urdf_name in hand_urdf_names:
-        side = "left" if "left" in hand_urdf_name else "right"
-        hand_path = _arena_hand_urdf_path(side, robot_version)
+    hand_urdf_dir = os.path.join(_ABILITY_HAND_MODELS_DIR, "urdf", "abilityHand")
+    for hand_urdf_name in ["ability_hand_left_large.urdf", "ability_hand_right_large.urdf"]:
+        hand_path = os.path.join(hand_urdf_dir, hand_urdf_name)
         assert os.path.isfile(hand_path), (
             f"Ability Hand URDF not found: {hand_path}\n"
-            "Mount official Psyonic ability-hand-ros2 (recommended):\n"
-            "  export ABILITY_HAND_MODELS_DIR=/path/to/ability-hand-ros2/src/ah_urdf\n"
-            "Or mount the ihmc-alex-sdk root:\n"
-            "  ./docker/run_docker.sh -m /path/to/ihmc-alex-sdk"
+            "Mount the ihmc-alex-sdk root (recommended):\n"
+            "  ./docker/run_docker.sh -m /path/to/ihmc-alex-sdk\n"
+            "Or mount ihmc_hands_ros2 separately and set:\n"
+            "  export ABILITY_HAND_MODELS_DIR=/ihmc_hands_ros2"
         )
         hand_root = etree.parse(hand_path).getroot()
         for child in hand_root:
@@ -793,14 +781,10 @@ def _merge_ability_hands_urdf(robot_version: str) -> str:
 
 
 def _resolve_standalone_hand_urdf(side: str, robot_version: str = ALEX_V1) -> str:
-    """Resolve ``package://`` paths in a standalone hand URDF for dex-retargeting."""
-    src_path = _arena_hand_urdf_path(side, robot_version)
+    """Resolve ``package://abilityHand/`` paths in a standalone hand URDF for dex-retargeting."""
+    src_path = os.path.join(_ABILITY_HAND_MODELS_DIR, "urdf", "abilityHand", f"ability_hand_{side}_large.urdf")
     output_path = os.path.join(_alex_urdf_dir(robot_version), f"ability_hand_{side}_large_resolved.urdf")
-    layout = detect_package_layout(_ABILITY_HAND_MODELS_DIR)
-    marker = (
-        f"<!-- hands_dir={_ABILITY_HAND_MODELS_DIR},side={side},"
-        f"robot_version={robot_version},layout={layout} -->"
-    )
+    marker = f"<!-- hands_dir={_ABILITY_HAND_MODELS_DIR},side={side},robot_version={robot_version} -->"
 
     if (
         os.path.exists(output_path)
@@ -1744,9 +1728,9 @@ class AlexAbilityHandObservationsCfg:
 class AlexAbilityHandEmbodiment(AlexTeleopEmbodimentMixin, EmbodimentBase):
     """Embodiment for the IHMC Alex V1 robot with Psyonic Ability Hands and PINK IK wrist control.
 
-    Requires alex-models mounted at /models and an Ability Hand package (official Psyonic
-    ``ability-hand-ros2/src/ah_urdf`` preferred, or legacy ``ihmc_hands_ros2``).
-    Set ``ABILITY_HAND_MODELS_DIR`` to override auto-detection.
+    Requires alex-models mounted at /models and the ihmc_hands_ros2 package accessible.
+    Either set ABILITY_HAND_MODELS_DIR or ensure the SDK layout
+    ``<sdk-root>/alex-ros2/ihmc_hands_ros2`` is resolvable from ``_ALEX_MODELS_DIR``'s parent.
     """
 
     name = "alex_ability_hands"
