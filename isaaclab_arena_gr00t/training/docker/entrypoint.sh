@@ -15,6 +15,8 @@
 #   NUM_GPUS          1
 #   DATALOADER_WORKERS 2
 #   LOW_VRAM          0     set 1 for <=16GB GPUs: diffusion head only, batch 2 + accum
+#   USE_LORA          0     set 1 to use LoRA for fine-tuning
+#   LORA_RANK         64    LoRA rank to use if USE_LORA=1
 #   OUTPUT_DIR        /checkpoints  (mount a volume here to survive restarts; training
 #                                    auto-resumes from the last checkpoint it finds)
 
@@ -35,6 +37,8 @@ SAVE_STEPS="${SAVE_STEPS:-5000}"
 NUM_GPUS="${NUM_GPUS:-1}"
 DATALOADER_WORKERS="${DATALOADER_WORKERS:-16}"
 LOW_VRAM="${LOW_VRAM:-0}"
+USE_LORA="${USE_LORA:-0}"
+LORA_RANK="${LORA_RANK:-64}"
 
 if [[ "${LOW_VRAM}" == "1" ]]; then
   GLOBAL_BATCH_SIZE="${GLOBAL_BATCH_SIZE:-2}"
@@ -44,6 +48,10 @@ else
   GLOBAL_BATCH_SIZE="${GLOBAL_BATCH_SIZE:-32}"
   GRAD_ACCUM_STEPS="${GRAD_ACCUM_STEPS:-1}"
   TUNE_FLAGS=(--tune-llm --tune-visual --tune-projector --tune-diffusion-model)
+fi
+
+if [[ "${USE_LORA}" == "1" ]]; then
+  TUNE_FLAGS+=(--use-lora --lora-rank "${LORA_RANK}")
 fi
 
 cd /workspace/Isaac-GR00T
@@ -71,7 +79,12 @@ done
 mkdir -p "${OUTPUT_DIR}"
 
 echo "=== Fine-tuning (output: ${OUTPUT_DIR}) ==="
-uv run python gr00t/experiment/launch_finetune.py \
+LAUNCHER=(uv run python)
+if (( NUM_GPUS > 1 )); then
+  LAUNCHER=(uv run torchrun --nproc_per_node="${NUM_GPUS}")
+fi
+
+"${LAUNCHER[@]}" gr00t/experiment/launch_finetune.py \
   --dataset-path "${DATASET_PATH}" \
   --output-dir "${OUTPUT_DIR}" \
   --modality-config-path "${MODALITY_CONFIG}" \

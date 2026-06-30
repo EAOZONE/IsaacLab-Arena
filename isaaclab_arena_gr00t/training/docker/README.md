@@ -95,6 +95,8 @@ srun --gres=gpu:1 --container-image=ghcr.io#eaozone/alex-gr00t-train:latest \
 | `HF_DATASET_ID` | `H2Ozone/alex_microwave` | LeRobot dataset repo to download |
 | `HF_MODEL_REPO` | `H2Ozone/alex_open_microwave_gr00t` | model repo to upload to |
 | `SKIP_UPLOAD` | `0` | `1` = train only, no upload |
+| `USE_LORA` | `0` | `1` = use LoRA for fine-tuning |
+| `LORA_RANK` | `64` | LoRA rank (if USE_LORA=1) |
 | `LOW_VRAM` | `0` | `1` = diffusion head only, batch 2 + grad-accum (≤16 GB GPUs) |
 | `GLOBAL_BATCH_SIZE` | `8` (`2` if LOW_VRAM) | effective batch size |
 | `MAX_STEPS` / `SAVE_STEPS` | `30000` / `5000` | training length / checkpoint cadence |

@@ -24,37 +24,28 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # clusters where Apptainer/Singularity runs the container as a non-root user.
 RUN curl -LsSf https://astral.sh/uv/install.sh | env UV_INSTALL_DIR=/usr/local/bin sh
 
-# Pin Isaac-GR00T to the same commit as the submodules/Isaac-GR00T checkout.
-ARG GR00T_REPO=https://github.com/NVIDIA/Isaac-GR00T
-ARG GR00T_COMMIT=e29d8fc50b0e4745120ae3fb72447986fe638aa6
-
+# Copy the local checkout of submodules/Isaac-GR00T to ensure
+# local code changes (like the LoRA implementation) are included.
 WORKDIR /workspace
-RUN git clone "${GR00T_REPO}" Isaac-GR00T \
-    && cd Isaac-GR00T \
-    && git checkout "${GR00T_COMMIT}"
+COPY submodules/Isaac-GR00T /workspace/Isaac-GR00T
 
 # flash-attn compiles from source here (no GPU needed at build time, only nvcc).
 # MAX_JOBS bounds the parallel nvcc jobs so the build doesn't exhaust RAM.
 WORKDIR /workspace/Isaac-GR00T
 ENV MAX_JOBS=4
-RUN uv sync --python 3.10 && uv pip install -e .
+RUN uv sync --python 3.10 && uv pip install -e . && uv pip install peft
 
 # At runtime `uv run` must never try to re-sync the env: the filesystem is
 # read-only under Apptainer/Singularity on clusters.
 ENV UV_NO_SYNC=1
 
-# Alex embodiment files (modality config, joint-space yamls) from the Arena fork.
-# Pass --build-arg ARENA_REF=<commit> to pin / bust the layer cache after pushing
-# config changes; the default "main" is resolved at first build and then cached.
-ARG ARENA_REPO=https://github.com/EAOZONE/IsaacLab-Arena
-ARG ARENA_REF=main
-RUN git clone --filter=blob:none --no-checkout "${ARENA_REPO}" /workspace/IsaacLab-Arena \
-    && cd /workspace/IsaacLab-Arena \
-    && git sparse-checkout set isaaclab_arena_gr00t/embodiments/alex \
-    && git checkout "${ARENA_REF}"
+# Copy the Arena code and entrypoint from their project-relative paths.
+# We copy the entire alex embodiment folder to get modality configs and yamls.
+WORKDIR /workspace/IsaacLab-Arena
+COPY isaaclab_arena_gr00t/embodiments/alex /workspace/IsaacLab-Arena/isaaclab_arena_gr00t/embodiments/alex
 
-COPY upload_to_hf.py /workspace/upload_to_hf.py
-COPY entrypoint.sh /entrypoint.sh
+COPY isaaclab_arena_gr00t/training/docker/upload_to_hf.py /workspace/upload_to_hf.py
+COPY isaaclab_arena_gr00t/training/docker/entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 
 # wandb is a hard dependency of the trainer; disable unless WANDB_API_KEY is set.
