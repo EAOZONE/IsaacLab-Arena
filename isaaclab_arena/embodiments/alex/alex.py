@@ -583,6 +583,24 @@ ABILITY_HAND_JOINT_NAMES_LIST = [
     "right_ability_hand_thumb_q2",
 ]
 
+# H2Ozone/lever_fingers (and alex_lever) LeRobot motor order: spine, 6+6 arms (no gripper),
+# per-finger q1/q2 interleaved hands. Column i in the dataset maps to index i here.
+_LEVER_FINGERS_ARM_JOINT_NAMES_LIST = [joint for joint in ARM_WRIST_JOINT_NAMES_LIST if "GRIPPER" not in joint]
+LEVER_FINGERS_ACTION_JOINT_NAMES_LIST = (
+    ["SPINE_Z"] + _LEVER_FINGERS_ARM_JOINT_NAMES_LIST + list(ABILITY_HAND_JOINT_NAMES_LIST)
+)
+LEVER_FINGERS_STATE_JOINT_NAMES_LIST = LEVER_FINGERS_ACTION_JOINT_NAMES_LIST + ["NECK_Z", "NECK_Y"]
+assert len(LEVER_FINGERS_ACTION_JOINT_NAMES_LIST) == 33, len(LEVER_FINGERS_ACTION_JOINT_NAMES_LIST)
+assert len(LEVER_FINGERS_STATE_JOINT_NAMES_LIST) == 35, len(LEVER_FINGERS_STATE_JOINT_NAMES_LIST)
+
+# lever_fingers / alex_lever omit *_GRIPPER_Z from state and action. On hardware the yaw
+# joint between WRIST_X and the Ability Hand adapter sits at +90° (hand mount). Isaac defaults
+# it to 0, which makes the wrist/hand appear rotated 90° CCW during playback.
+LEVER_FINGERS_ABSENT_JOINT_DEFAULTS = {
+    "LEFT_GRIPPER_Z": math.pi / 2,
+    "RIGHT_GRIPPER_Z": -math.pi / 4,
+}
+
 # 4-bar linkage q2 lower limit at q1=0 is 0.766 rad; use a small margin so defaults
 # pass PhysX limit checks (strict float comparison at the boundary fails).
 _ABILITY_HAND_Q2_OPEN_POS = 0.77
@@ -847,15 +865,69 @@ def _configure_policy_arm_actuators(robot_cfg: ArticulationCfg) -> None:
     )
 
 
+# Ability-hand finger PD gains. Defaults were too soft (effort_limit=5 N·m, stiffness=500):
+# contact forces while pushing a door or handle collapsed the fingers inward instead of holding
+# position, so the hand never applies the push-back torque needed to actually depress a handle or
+# swing a door open. Raise stiffness for position holding; use an unlimited effort cap so the PD
+# can resist push-back torques instead of saturating and yielding.
+ALEX_ABILITY_HAND_EFFORT_LIMIT = float(os.environ.get("ALEX_ABILITY_HAND_EFFORT_LIMIT", "inf"))
+ALEX_ABILITY_HAND_STIFFNESS = float(os.environ.get("ALEX_ABILITY_HAND_STIFFNESS", "3000.0"))
+ALEX_ABILITY_HAND_DAMPING = float(os.environ.get("ALEX_ABILITY_HAND_DAMPING", "100.0"))
+
+
 def _configure_hand_actuators(robot_cfg: ArticulationCfg) -> None:
     robot_cfg.actuators["hands"] = ImplicitActuatorCfg(
         joint_names_expr=[".*ability_hand.*_q[12]"],
-        effort_limit=5.0,
-        velocity_limit=10.0,
-        stiffness=500.0,
-        damping=20.0,
+        effort_limit=ALEX_ABILITY_HAND_EFFORT_LIMIT,
+        velocity_limit=torch.inf,
+        stiffness=ALEX_ABILITY_HAND_STIFFNESS,
+        damping=ALEX_ABILITY_HAND_DAMPING,
         armature=0.0,
     )
+
+
+def _configure_lever_fingers_torso_actuators(robot_cfg: ArticulationCfg) -> None:
+    """High-bandwidth torso/neck PD for lever_fingers joint-position replay and eval.
+
+    The default ``DelayedPDActuator`` torso group (stiffness ~5–50) cannot track
+    commanded ``SPINE_Z`` / ``NECK_*`` targets during kinematic playback or policy
+    eval; arms already use the stiff teleop PD gains.
+    """
+    robot_cfg.actuators["torso"] = ImplicitActuatorCfg(
+        joint_names_expr=["SPINE_Z", "NECK_Z", "NECK_Y"],
+        effort_limit=torch.inf,
+        velocity_limit=torch.inf,
+        stiffness=ALEX_TELEOP_ARM_STIFFNESS,
+        damping=ALEX_TELEOP_ARM_DAMPING,
+        armature=0.0,
+    )
+
+
+def _configure_lever_fingers_robot(
+    robot_version: str,
+) -> tuple[ArticulationCfg, str, str]:
+    """Ability-hand Alex with stiff joint tracking for lever_fingers playback / eval."""
+    paths = _alex_arena_urdf_paths(robot_version)
+    merged_urdf = _merge_ability_hands_urdf(robot_version)
+    resolved_urdf = _resolve_mesh_paths(merged_urdf, paths["ability_hands_resolved"], robot_version)
+    pink_ik_urdf = _strip_collisions_for_pink_ik(resolved_urdf, paths["ability_hands_pink_ik"])
+
+    robot_cfg = _default_nubs_cfg(robot_version)
+    robot_cfg.prim_path = "{ENV_REGEX_NS}/Robot"
+    robot_cfg.spawn.asset_path = resolved_urdf
+    robot_cfg.soft_joint_pos_limit_factor = 1.0
+
+    _configure_teleop_fixed_base(robot_cfg)
+    _configure_teleop_arm_actuators(robot_cfg, include_wrists=True)
+    _configure_lever_fingers_torso_actuators(robot_cfg)
+    _configure_hand_actuators(robot_cfg)
+    robot_cfg.init_state.joint_pos = {
+        "LEFT_ELBOW_Y": -1.5708,
+        "RIGHT_ELBOW_Y": -1.5708,
+        **_ABILITY_HAND_DEFAULT_JOINT_POS,
+        **LEVER_FINGERS_ABSENT_JOINT_DEFAULTS,
+    }
+    return robot_cfg, resolved_urdf, pink_ik_urdf
 
 
 def _configure_ability_hand_robot(
@@ -2000,4 +2072,104 @@ class AlexV2AbilityHandJointPositionEmbodiment(AlexAbilityHandJointPositionEmbod
     """
 
     name = "alex_v2_ability_hands_joint_pos"
+    robot_version = ALEX_V2
+
+
+@configclass
+class AlexLeverFingersJointPositionActionsCfg:
+    """Joint-position actions aligned with H2Ozone/lever_fingers LeRobot motor order.
+
+    35-DOF absolute targets: the 33 ``action`` motors plus ``NECK_Z`` / ``NECK_Y``
+    (measured in ``observation.state`` only on hardware). ``preserve_order=True``
+    so column *i* matches the dataset state motor list.
+    """
+
+    joint_pos = JointPositionActionCfg(
+        asset_name="robot",
+        joint_names=LEVER_FINGERS_STATE_JOINT_NAMES_LIST,
+        scale=1.0,
+        use_default_offset=False,
+        preserve_order=True,
+    )
+
+
+@configclass
+class AlexLeverFingersObservationsCfg:
+    """Observations for lever_fingers / alex_lever joint-space policies."""
+
+    @configclass
+    class PolicyCfg(ObsGroup):
+        """Observations for the policy group."""
+
+        actions = ObsTerm(func=mdp.last_action)
+        robot_joint_pos = ObsTerm(
+            func=base_mdp.joint_pos,
+            params={
+                "asset_cfg": SceneEntityCfg(
+                    "robot",
+                    joint_names=LEVER_FINGERS_STATE_JOINT_NAMES_LIST,
+                    preserve_order=True,
+                )
+            },
+        )
+        robot_root_pos = ObsTerm(func=base_mdp.root_pos_w, params={"asset_cfg": SceneEntityCfg("robot")})
+        robot_root_rot = ObsTerm(func=base_mdp.root_quat_w, params={"asset_cfg": SceneEntityCfg("robot")})
+        robot_links_state = ObsTerm(func=mdp.get_all_robot_link_state)
+
+        left_eef_pos = ObsTerm(func=mdp.get_eef_pos, params={"link_name": "LEFT_GRIPPER_Z_LINK"})
+        left_eef_quat = ObsTerm(func=mdp.get_eef_quat, params={"link_name": "LEFT_GRIPPER_Z_LINK"})
+        right_eef_pos = ObsTerm(func=mdp.get_eef_pos, params={"link_name": "RIGHT_GRIPPER_Z_LINK"})
+        right_eef_quat = ObsTerm(func=mdp.get_eef_quat, params={"link_name": "RIGHT_GRIPPER_Z_LINK"})
+
+        def __post_init__(self):
+            self.enable_corruption = False
+            self.concatenate_terms = False
+
+    policy: PolicyCfg = PolicyCfg()
+
+
+@register_asset
+class AlexLeverFingersJointPositionEmbodiment(EmbodimentBase):
+    """Alex V1 with Ability Hands; action/obs layout matches H2Ozone/lever_fingers.
+
+    35-DOF actions and 35-DOF ``robot_joint_pos`` state in the dataset state motor order
+    (``alex_lever_fingers_sim_action_joint_space.yaml``). GR00T policies only output the
+    first 33 motors; neck slots are driven from measured state during closed-loop eval.
+    Joints omitted from the dataset (``*_GRIPPER_Z``) default to
+    ``LEVER_FINGERS_ABSENT_JOINT_DEFAULTS`` (+90° yaw for the Ability Hand mount).
+    """
+
+    name = "alex_lever_fingers_joint_pos"
+    default_arm_mode = ArmMode.RIGHT
+    robot_version = ALEX_V1
+
+    def __init__(
+        self,
+        enable_cameras: bool = False,
+        initial_pose: Pose | None = None,
+        use_tiled_camera: bool = False,
+    ):
+        super().__init__(enable_cameras, initial_pose)
+
+        robot_cfg, _resolved_urdf, _pink_ik_urdf = _configure_lever_fingers_robot(self.robot_version)
+
+        self.scene_config = AlexSceneCfg()
+        self.scene_config.robot = robot_cfg
+
+        self.action_config = AlexLeverFingersJointPositionActionsCfg()
+
+        self.observation_config = AlexLeverFingersObservationsCfg()
+        self.observation_config.policy.concatenate_terms = self.concatenate_observation_terms
+        self.event_config = AlexEventCfg()
+        _configure_camera_events(self.event_config, enable_cameras)
+        self.camera_config = AlexCameraCfg()
+        self.camera_config._use_tiled_camera = use_tiled_camera
+        self.camera_config.__post_init__()
+
+
+@register_asset
+class AlexV2LeverFingersJointPositionEmbodiment(AlexLeverFingersJointPositionEmbodiment):
+    """Alex V2 variant of :class:`AlexLeverFingersJointPositionEmbodiment`."""
+
+    name = "alex_v2_lever_fingers_joint_pos"
     robot_version = ALEX_V2

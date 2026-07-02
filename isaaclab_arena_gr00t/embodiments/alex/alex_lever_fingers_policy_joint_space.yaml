@@ -1,0 +1,48 @@
+# Copyright (c) 2026, The Isaac Lab Arena Project Developers (https://github.com/isaac-sim/IsaacLab-Arena/blob/main/CONTRIBUTORS.md).
+# All rights reserved.
+#
+# SPDX-License-Identifier: Apache-2.0
+
+# Policy joint groups for H2Ozone/lever_fingers GR00T modality (see alex_lever_modality.json).
+joints:
+  spine:
+    - SPINE_Z
+  left_arm:
+    - LEFT_SHOULDER_Y
+    - LEFT_SHOULDER_X
+    - LEFT_SHOULDER_Z
+    - LEFT_ELBOW_Y
+    - LEFT_WRIST_Z
+    - LEFT_WRIST_X
+  right_arm:
+    - RIGHT_SHOULDER_Y
+    - RIGHT_SHOULDER_X
+    - RIGHT_SHOULDER_Z
+    - RIGHT_ELBOW_Y
+    - RIGHT_WRIST_Z
+    - RIGHT_WRIST_X
+  left_hand:
+    - left_ability_hand_index_q1
+    - left_ability_hand_index_q2
+    - left_ability_hand_middle_q1
+    - left_ability_hand_middle_q2
+    - left_ability_hand_ring_q1
+    - left_ability_hand_ring_q2
+    - left_ability_hand_pinky_q1
+    - left_ability_hand_pinky_q2
+    - left_ability_hand_thumb_q1
+    - left_ability_hand_thumb_q2
+  right_hand:
+    - right_ability_hand_index_q1
+    - right_ability_hand_index_q2
+    - right_ability_hand_middle_q1
+    - right_ability_hand_middle_q2
+    - right_ability_hand_ring_q1
+    - right_ability_hand_ring_q2
+    - right_ability_hand_pinky_q1
+    - right_ability_hand_pinky_q2
+    - right_ability_hand_thumb_q1
+    - right_ability_hand_thumb_q2
+  neck:
+    - NECK_Z
+    - NECK_Y

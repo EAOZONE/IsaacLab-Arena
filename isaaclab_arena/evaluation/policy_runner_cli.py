@@ -152,4 +152,13 @@ def add_policy_runner_arguments(parser: argparse.ArgumentParser) -> None:
         default=None,
         help="Seed for the random-poke RNG (reproducible nudges). Default: unseeded.",
     )
+    parser.add_argument(
+        "--viz_action_targets",
+        action="store_true",
+        default=False,
+        help=(
+            "Show small spheres (blue=left, orange=right) at the wrist targets the policy's raw"
+            " action commands. Only supported for the 34-dim ability-hand EEF action layout."
+        ),
+    )
     add_ikstreamer_cli_args(parser)

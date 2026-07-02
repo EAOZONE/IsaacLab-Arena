@@ -257,6 +257,26 @@ def list_doorman_doors() -> list[str]:
     return sorted(glob.glob(os.path.join(_DOORMAN_DOORS_DIR, "door_*.usd")))
 
 
+def doorman_door_open_lr(door_index: int) -> int | None:
+    """Return a door's ``doorOpenLR`` hinge side (+1 = opens left, -1 = opens right).
+
+    Read from the generator's ``metadata.json`` alongside the door USDs (see
+    ``scripts/doorman_gen/door.py``: ``"left" -> 1``). Returns ``None`` if the metadata file
+    or this door's entry is missing.
+    """
+    import json
+
+    meta_path = os.path.join(_DOORMAN_DOORS_DIR, "metadata.json")
+    if not os.path.isfile(meta_path):
+        return None
+    with open(meta_path) as f:
+        meta = json.load(f)
+    entry = meta.get(f"door_{door_index:04d}")
+    if not entry or "doorOpenLR" not in entry:
+        return None
+    return int(entry["doorOpenLR"])
+
+
 @register_asset
 class DoormanDoor(LibraryObject, Openable):
     """A procedurally-generated DoorMan articulated door (revolute ``hinge_joint``).
@@ -1966,6 +1986,98 @@ class TableMapleRobolab(LibraryObject):
     name = "table_maple_robolab"
     tags = ["background", "fixture", "robolab"]
     usd_path = f"{ISAACLAB_NUCLEUS_DIR}/Arena/assets/object_library/srl_robolab_assets/fixtures/table_maple.usd"
+
+
+# --- Lever practice board -----------------------------------------------------------
+# Raw CAD export (Y-up, inches, no colliders). Normalize to Z-up/meters, bake colliders,
+# and author revolute lever joints once per clone with::
+#
+#     /isaac-sim/python.sh isaaclab_arena/scripts/lever/apply_layout_colliders.py
+_LEVER_LAYOUT_USD = os.path.join(os.path.dirname(__file__), "Lever", "Levers.usd")
+
+
+@register_asset
+class LeverLayout(LibraryObject):
+    """IHMC lever practice board (``Levers.usd``).
+
+    A fixed-base articulation: static board geometry plus revolute levers authored by
+    ``scripts/lever/apply_layout_colliders.py`` (see ``layout_physics.py``).
+    """
+
+    name = "lever_layout"
+    tags = ["object", "lever", "fixture"]
+    object_type = ObjectType.ARTICULATION
+    usd_path = _LEVER_LAYOUT_USD
+    spawn_cfg_addon = {
+        "articulation_props": sim_utils.ArticulationRootPropertiesCfg(
+            fix_root_link=True,
+            enabled_self_collisions=False,
+            solver_position_iteration_count=16,
+            solver_velocity_iteration_count=4,
+        ),
+        "rigid_props": RIGID_BODY_PROPS_MEDIUM_PRECISION,
+        "collision_props": sim_utils.CollisionPropertiesCfg(contact_offset=0.002, rest_offset=0.0),
+    }
+    asset_cfg_addon = {
+        "init_state": EMPTY_ARTICULATION_INIT_STATE_CFG,
+    }
+
+    def __init__(
+        self,
+        instance_name: str | None = None,
+        prim_path: str | None = None,
+        initial_pose: Pose | None = None,
+    ):
+        assert os.path.isfile(self.usd_path), (
+            f"Lever board USD not found at {self.usd_path}.\n"
+            "Place the Levers.usd export there, then normalize it with:\n"
+            "  /isaac-sim/python.sh isaaclab_arena/scripts/lever/apply_layout_colliders.py"
+        )
+        super().__init__(instance_name=instance_name, prim_path=prim_path, initial_pose=initial_pose)
+
+
+_LEVER_PRACTICE_TABLE_SPAWN_CFG = sim_utils.CuboidCfg(
+    size=(0.55, 0.60, 0.04),
+    rigid_props=sim_utils.RigidBodyPropertiesCfg(kinematic_enabled=True),
+    collision_props=sim_utils.CollisionPropertiesCfg(collision_enabled=False, contact_offset=0.005),
+    visual_material=sim_utils.PreviewSurfaceCfg(diffuse_color=(0.55, 0.45, 0.35)),
+    visible=True,
+)
+
+
+@register_asset
+class LeverPracticeTable(Object):
+    """Visible kinematic tabletop for the lever practice board (81.28 cm when posed by the env).
+
+    Compact footprint (55 x 60 cm) centered under the board mesh by ``alex_lever_teleop``.
+    """
+
+    name = "lever_practice_table"
+    tags = ["background", "procedural", "lever"]
+
+    def __init__(
+        self,
+        instance_name: str | None = None,
+        prim_path: str | None = None,
+        initial_pose: Pose | None = None,
+    ):
+        resolved_name = instance_name if instance_name is not None else "table"
+        resolved_prim = prim_path if prim_path is not None else "{ENV_REGEX_NS}/table"
+        super().__init__(
+            name=resolved_name,
+            prim_path=resolved_prim,
+            object_type=ObjectType.RIGID,
+            usd_path="",
+            initial_pose=initial_pose,
+        )
+
+    def _generate_rigid_cfg(self) -> RigidObjectCfg:
+        cfg = RigidObjectCfg(
+            prim_path=self.prim_path,
+            spawn=_LEVER_PRACTICE_TABLE_SPAWN_CFG,
+            **self.asset_cfg_addon,
+        )
+        return self._add_initial_pose_to_cfg(cfg)
 
 
 # ---------------------------------------------------------------------------

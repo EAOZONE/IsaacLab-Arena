@@ -1,0 +1,26 @@
+# Copyright (c) 2026, The Isaac Lab Arena Project Developers (https://github.com/isaac-sim/IsaacLab-Arena/blob/main/CONTRIBUTORS.md).
+# All rights reserved.
+#
+# SPDX-License-Identifier: Apache-2.0
+
+# Gr00tRemoteClosedloopPolicy config for H2Ozone/lever_fingers joint-space checkpoints.
+# Pair with embodiment alex_v2_lever_fingers_joint_pos and env alex_lever_teleop.
+language_instruction: "Operate the lever board."
+action_horizon: 16
+embodiment_tag: NEW_EMBODIMENT
+video_backend: decord
+modality_config_path: isaaclab_arena_gr00t/embodiments/alex/alex_lever_data_config.py
+
+policy_joints_config_path: isaaclab_arena_gr00t/embodiments/alex/alex_lever_fingers_policy_joint_space.yaml
+action_joints_config_path: isaaclab_arena_gr00t/embodiments/alex/alex_lever_fingers_sim_action_joint_space.yaml
+state_joints_config_path: isaaclab_arena_gr00t/embodiments/alex/alex_lever_fingers_state_joint_space.yaml
+
+action_chunk_length: 16
+task_mode_name: alex_tabletop_manipulation
+
+pov_cam_name_sim:
+  - zed_left_cam_rgb
+  - zed_right_cam_rgb
+
+original_image_size: [480, 640, 3]
+target_image_size: [480, 640, 3]

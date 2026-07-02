@@ -80,6 +80,7 @@ def rollout_policy(
     language_instruction: str | None = None,
     perturbation: "ArmPoke | None" = None,
     ikstreamer_bridge=None,
+    action_target_marker=None,
 ) -> dict[str, Any]:
     assert num_steps is not None or num_episodes is not None, "Either num_steps or num_episodes must be provided"
     assert num_steps is None or num_episodes is None, "Only one of num_steps or num_episodes must be provided"
@@ -120,6 +121,8 @@ def rollout_policy(
         while True:
             with torch.inference_mode():
                 actions = policy.get_action(env, obs)
+                if action_target_marker is not None:
+                    action_target_marker.update(actions)
                 if perturbation is not None:
                     perturbation.apply(episode_step)
                 obs, _, terminated, truncated, _ = env.step(actions)
@@ -342,6 +345,14 @@ def main():
                 + (f", repeating every {args_cli.poke_period} steps" if args_cli.poke_period else "")
             )
 
+        # Optionally show spheres at the policy's raw wrist-target positions each step.
+        action_target_marker = None
+        if args_cli.viz_action_targets:
+            from isaaclab_arena.evaluation.action_target_marker import ActionTargetMarker
+
+            action_target_marker = ActionTargetMarker()
+            print(f"[Rank {local_rank}/{world_size}] Action-target markers enabled (blue=left, orange=right)")
+
         steps_str = f"{num_steps} steps" if num_steps is not None else f"{num_episodes} episodes"
         print(f"[Rank {local_rank}/{world_size}] Starting rollout ({steps_str})")
 
@@ -362,6 +373,7 @@ def main():
                 args_cli.language_instruction,
                 perturbation=perturbation,
                 ikstreamer_bridge=ikstreamer_bridge,
+                action_target_marker=action_target_marker,
             )
         finally:
             if ikstreamer_bridge is not None:

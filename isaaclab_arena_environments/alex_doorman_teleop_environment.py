@@ -57,7 +57,16 @@ from isaaclab_arena_environments.example_environment_base import ExampleEnvironm
 if TYPE_CHECKING:
     from isaaclab_arena.environments.isaaclab_arena_environment import IsaacLabArenaEnvironment
 
-# Alex spawn: positioned in front of the door, yawed 180° about Z to face it.
+# Alex spawn: positioned in front of the door, yawed 180° about Z to face it. Pelvis z lowered
+# from the original 0.94296 (Alex's generic standing height) after instrumenting rollout_policy
+# to log the Pink IK wrist target vs. actual right_eef_pos each step: the arm was consistently
+# freezing ~0.25-0.3m short in Z only (X/Y tracked the commanded target fine), with the elbow
+# driven to near-full extension and the shoulder creeping toward its joint limit every step —
+# i.e. a real kinematic reach shortfall (arm too high to reach the low latched-door handle from a
+# fixed pelvis), not an IK gain/damping issue (raising gain only adds oscillation near that
+# near-singular, fully-extended configuration, never more reach) or a contact/friction lock.
+# Confirmed empirically: at the old height, door_index=1 failed 3/3 episodes with the arm frozen
+# at that shortfall; at z=0.80 the same door succeeded 2/2 (and door_index=0 stayed 2/2).
 _ALEX_SPAWN_POSE = ((0.9, 0.17432, 0.94296), (0.0, 0.0, 1.0, 0.0))
 # Base door pose: hinge at the door origin, slab along local +x, lever on the local -y face.
 # DoorMan doors load with a different local-frame orientation than ws_alex_door, so 180° about Z
@@ -68,6 +77,35 @@ _DOORMAN_DOOR_POSE = ((0.34315, 0.0, 0.0), (0.0, 0.0, 1.0, 0.0))
 # Per-build placement jitter (seeded): small xy offset + yaw wobble, kept within Alex's reach.
 _DOOR_XY_JITTER = 0.05
 _DOOR_YAW_JITTER = 0.10
+
+# Per-hinge-side language instructions. These must match the strings the GR00T policy was
+# trained with (dataset H2Ozone/alex_latched_door tasks.jsonl): the dataset's left block was
+# recorded on doorOpenLR=+1 ("opens left") doors, the right block on doorOpenLR=-1. Selected
+# automatically per door (see ``_doorman_task_description``); override with --task_description.
+_DOORMAN_TASK_OPEN_LEFT = "Open the door, pushing it open to the left."
+_DOORMAN_TASK_OPEN_RIGHT = "Open the door, pushing it open to the right."
+
+# Grippy (but not extreme) finger contacts so the hand does not slip off handles while pushing.
+# Lowered from the put_and_close_door/G1 convention of static=6.0/dynamic=5.0: with
+# friction_combine_mode="max" that value also governs incidental finger-vs-door-panel contact
+# during the approach, which is unnecessarily sticky for a push interaction. Note this turned out
+# NOT to be the cause of the reach shortfall fixed by _ALEX_SPAWN_POSE's z above (verified by
+# reproducing the freeze at 6.0/5.0 and again, unchanged, at these lower values) — it's kept at a
+# more realistic level on general principle, not as the fix.
+_ABILITY_HAND_FINGER_FRICTION_MATERIAL_PATH = "/World/Materials/alex_ability_hand_high_friction_fingers"
+_ABILITY_HAND_FINGER_STATIC_FRICTION = 1.5
+_ABILITY_HAND_FINGER_DYNAMIC_FRICTION = 1.2
+_ABILITY_HAND_FINGER_PRIM_NAME_MARKERS = ("index", "middle", "ring", "pinky", "thumb", "fsr")
+
+
+def _doorman_task_description(door_index: int) -> str | None:
+    """Pick the per-side instruction from the door's hinge side, or ``None`` if unknown."""
+    from isaaclab_arena.assets.object_library import doorman_door_open_lr
+
+    open_lr = doorman_door_open_lr(door_index)
+    if open_lr is None:
+        return None
+    return _DOORMAN_TASK_OPEN_LEFT if open_lr == 1 else _DOORMAN_TASK_OPEN_RIGHT
 
 _VALID_ALEX_EMBODIMENTS = (
     "alex_pink",
@@ -116,7 +154,13 @@ class AlexDoormanTeleopEnvironment(ExampleEnvironmentBase):
         else:
             door_index = rng.randrange(num_doors)
         door = DoormanDoor(door_index=door_index)
-        print(f"[alex_doorman_teleop] door_index={door_index} ({num_doors} doors available)")
+        # Auto-select the per-hinge-side instruction so eval matches the GR00T training labels;
+        # an explicit --task_description (or --language_instruction at eval) overrides it.
+        task_description = args_cli.task_description or _doorman_task_description(door_index)
+        print(
+            f"[alex_doorman_teleop] door_index={door_index} ({num_doors} doors available); "
+            f"task_description={task_description!r}"
+        )
 
         # Ground + door + a (randomizable) dome light. The ground_plane background ships no
         # lights, so the dome light keeps cameras lit (mirrors alex_open_door).
@@ -125,6 +169,14 @@ class AlexDoormanTeleopEnvironment(ExampleEnvironmentBase):
 
         embodiment = self.asset_registry.get_asset_by_name(args_cli.embodiment)(enable_cameras=args_cli.enable_cameras)
         embodiment.set_initial_pose(Pose(position_xyz=_ALEX_SPAWN_POSE[0], rotation_xyzw=_ALEX_SPAWN_POSE[1]))
+
+        if hasattr(embodiment, "set_finger_contact_friction"):
+            embodiment.set_finger_contact_friction(
+                material_path=_ABILITY_HAND_FINGER_FRICTION_MATERIAL_PATH,
+                static_friction=_ABILITY_HAND_FINGER_STATIC_FRICTION,
+                dynamic_friction=_ABILITY_HAND_FINGER_DYNAMIC_FRICTION,
+                prim_name_markers=_ABILITY_HAND_FINGER_PRIM_NAME_MARKERS,
+            )
 
         # Placement jitter DR: offset the base door pose by a small seeded xy/yaw wobble.
         base_xyz, base_rot = _DOORMAN_DOOR_POSE
@@ -153,7 +205,7 @@ class AlexDoormanTeleopEnvironment(ExampleEnvironmentBase):
                 openness_threshold=args_cli.openness_threshold,
                 reset_openness=args_cli.reset_openness,
                 episode_length_s=args_cli.episode_length_s,
-                task_description=args_cli.task_description,
+                task_description=task_description,
                 fail_on_ik_error=args_cli.fail_on_ik_error,
             ),
             teleop_device=teleop_device,
