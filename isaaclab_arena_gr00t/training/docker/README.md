@@ -92,9 +92,8 @@ srun --gres=gpu:1 --container-image=ghcr.io#eaozone/alex-gr00t-train:latest \
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `HF_DATASET_ID` | `H2Ozone/alex_lever` | LeRobot dataset repo to download |
-| `HF_MODEL_REPO` | `H2Ozone/alex_lever_gr00t` | model repo to upload to |
-| `SKIP_DOWNLOAD` | `0` | `1` = use bind-mounted `DATASET_PATH` (cluster/local data) |
+| `HF_DATASET_ID` | `H2Ozone/alex_microwave` | LeRobot dataset repo to download |
+| `HF_MODEL_REPO` | `H2Ozone/alex_open_microwave_gr00t` | model repo to upload to |
 | `SKIP_UPLOAD` | `0` | `1` = train only, no upload |
 | `USE_LORA` | `0` | `1` = use LoRA for fine-tuning |
 | `LORA_RANK` | `64` | LoRA rank (if USE_LORA=1) |
@@ -110,10 +109,7 @@ repo, with optimizer state stripped by default.
 
 ## Relation to the other training paths
 
-- `../README.md` — end-to-end workflow for real-robot `alex_lever` (prepare,
-  H100 cluster SLURM, local single-GPU, deploy).
-- `../prepare_alex_lever_dataset.sh` — convert local LeRobot v3 → GR00T layout.
-- `../alex_finetune_single_gpu.sh` — local host training against the
+- `alex_finetune_single_gpu.sh` — local host training against the
   `submodules/Isaac-GR00T` checkout (same pinned commit as this image).
 - `alex_colab_finetune.ipynb` — Colab; this image replaces it for any machine
   where you can run Docker.

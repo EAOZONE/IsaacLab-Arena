@@ -1,4 +1,4 @@
-# Self-contained GR00T N1.6 fine-tuning image for Alex joint-space tasks (lever, etc.).
+# Self-contained GR00T N1.6 fine-tuning image for the Alex open-microwave task.
 #
 # Everything is fetched from the internet at build/run time — no files from any
 # particular machine are needed. On any computer with Docker + NVIDIA toolkit:
@@ -43,8 +43,6 @@ ENV UV_NO_SYNC=1
 # We copy the entire alex embodiment folder to get modality configs and yamls.
 WORKDIR /workspace/IsaacLab-Arena
 COPY isaaclab_arena_gr00t/embodiments/alex /workspace/IsaacLab-Arena/isaaclab_arena_gr00t/embodiments/alex
-COPY isaaclab_arena_gr00t/lerobot/convert_lerobot_v3_to_gr00t.py \
-  /workspace/IsaacLab-Arena/isaaclab_arena_gr00t/lerobot/convert_lerobot_v3_to_gr00t.py
 
 COPY isaaclab_arena_gr00t/training/docker/upload_to_hf.py /workspace/upload_to_hf.py
 COPY isaaclab_arena_gr00t/training/docker/entrypoint.sh /entrypoint.sh

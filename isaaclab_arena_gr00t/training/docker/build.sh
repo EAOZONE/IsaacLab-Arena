@@ -14,8 +14,5 @@ set -euo pipefail
 
 IMAGE="${1:-alex-gr00t-train}"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-REPO_ROOT="$(cd "${SCRIPT_DIR}/../../.." && pwd)"
 
-# Build context is the repo root: the Dockerfile COPYs submodules/Isaac-GR00T and
-# isaaclab_arena_gr00t/... paths relative to it.
-DOCKER_BUILDKIT=1 docker build -f "${SCRIPT_DIR}/Dockerfile" -t "${IMAGE}" "${REPO_ROOT}"
+DOCKER_BUILDKIT=1 docker build -t "${IMAGE}" "${SCRIPT_DIR}"

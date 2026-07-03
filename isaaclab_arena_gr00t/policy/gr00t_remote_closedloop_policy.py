@@ -37,7 +37,6 @@ from isaaclab_arena_gr00t.streaming.gr00t_eef_ikstream_bridge import (
     stream_env_action_to_ikstreamer,
 )
 from isaaclab_arena_gr00t.utils.io_utils import create_config_from_yaml, load_gr00t_modality_config_from_file
-from isaaclab_arena_gr00t.utils.joints_conversion import filter_policy_joints_config_for_modality_keys
 
 
 # TODO(xinjieyao, 2026-04-27): consider adding RemotePolicyArgs to inherit from BasePolicyArgs
@@ -116,13 +115,6 @@ class Gr00tRemoteClosedloopPolicy(PolicyBase):
             self.policy_config.modality_config_path,
             self.policy_config.embodiment_tag,
         )
-        policy_action_groups = filter_policy_joints_config_for_modality_keys(
-            self.modality_configs["action"].modality_keys,
-            self.policy_joints_config,
-        )
-        self._policy_action_joint_names = {
-            joint_name for joint_names in policy_action_groups.values() for joint_name in joint_names
-        }
 
         # Action / chunk shapes
         self.action_dim = compute_action_dim(self.task_mode, self.robot_action_joints_config)
@@ -224,7 +216,6 @@ class Gr00tRemoteClosedloopPolicy(PolicyBase):
             fetch_chunk,
             hold_action=self._extract_hold_action(observation),
         )
-        actions = self._fill_state_only_action_joints_from_observation(actions, observation)
 
         if self._ikstreamer_bridge is not None:
             stream_env_action_to_ikstreamer(
@@ -247,24 +238,6 @@ class Gr00tRemoteClosedloopPolicy(PolicyBase):
             if state_idx is not None:
                 hold_action[:, action_idx] = joint_pos_sim[:, state_idx]
         return hold_action
-
-    def _fill_state_only_action_joints_from_observation(
-        self, actions: torch.Tensor, observation: dict[str, Any]
-    ) -> torch.Tensor:
-        """Copy joints that are in sim action but absent from the GR00T policy output.
-
-        lever_fingers records neck in ``observation.state`` only; leave those action
-        slots at the measured state each step so PD does not drive them to zero.
-        """
-        joint_pos_sim = observation["policy"]["robot_joint_pos"].to(device=self.device, dtype=torch.float)
-        for joint_name, action_idx in self.robot_action_joints_config.items():
-            state_idx = self.robot_state_joints_config.get(joint_name)
-            if state_idx is None:
-                continue
-            if joint_name in self._policy_action_joint_names:
-                continue
-            actions[:, action_idx] = joint_pos_sim[:, state_idx]
-        return actions
 
     def _get_action_chunk(
         self, observation: dict[str, Any], camera_names: list[str] | str = "robot_head_cam_rgb"
