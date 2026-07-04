@@ -8,6 +8,7 @@
       <sourceFolder url="file://$MODULE_DIR$/submodules/IsaacLab/source/isaaclab_mimic" isTestSource="false" />
       <sourceFolder url="file://$MODULE_DIR$/submodules/Isaac-GR00T" isTestSource="false" />
       <sourceFolder url="file://$MODULE_DIR$/submodules/IsaacLab/source/isaaclab" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/submodules/Isaac-GR00T/external_dependencies/GR00T-WholeBodyControl" isTestSource="false" />
       <excludeFolder url="file://$MODULE_DIR$/.venv" />
       <excludeFolder url="file://$MODULE_DIR$/submodules/Isaac-GR00T/.venv" />
     </content>
