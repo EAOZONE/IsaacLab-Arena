@@ -111,7 +111,9 @@ def convert_yaml_value(field_type: type, value: Any) -> Any:
     """Convert YAML value to the appropriate type based on field type annotation."""
     # Handle Path fields
     if field_type == Path or (
-        hasattr(field_type, "__origin__") and field_type.__origin__ is Union and Path in field_type.__args__
+        hasattr(field_type, "__origin__")
+        and field_type.__origin__ is Union
+        and Path in field_type.__args__
     ):
         if isinstance(value, str):
             return Path(value)
@@ -130,7 +132,9 @@ def convert_yaml_value(field_type: type, value: Any) -> Any:
     return value
 
 
-def load_config_from_yaml(yaml_path: str | Path, config_class: type[ConfigType]) -> dict[str, Any]:
+def load_config_from_yaml(
+    yaml_path: str | Path, config_class: type[ConfigType]
+) -> dict[str, Any]:
     """
     Load configuration from a YAML file for any dataclass.
 
@@ -158,16 +162,22 @@ def load_config_from_yaml(yaml_path: str | Path, config_class: type[ConfigType])
     for field_name, value in yaml_data.items():
         if field_name in field_types:
             try:
-                converted_data[field_name] = convert_yaml_value(field_types[field_name], value)
+                converted_data[field_name] = convert_yaml_value(
+                    field_types[field_name], value
+                )
             except Exception as e:
-                print(f"Warning: Failed to convert field '{field_name}' with value '{value}': {e}")
+                print(
+                    f"Warning: Failed to convert field '{field_name}' with value '{value}': {e}"
+                )
                 converted_data[field_name] = value
         else:
             print(f"Warning: Unknown field '{field_name}' in YAML config")
     return converted_data
 
 
-def create_config_from_yaml(yaml_path: str | Path, config_class: type[ConfigType]) -> ConfigType:
+def create_config_from_yaml(
+    yaml_path: str | Path, config_class: type[ConfigType]
+) -> ConfigType:
     """Create a configuration object from a YAML file using any dataclass.
 
     Args:
@@ -194,7 +204,9 @@ def create_config_from_yaml(yaml_path: str | Path, config_class: type[ConfigType
     return config
 
 
-def load_gr00t_modality_config_from_file(modality_config_path: str | Path, embodiment_tag: str):
+def load_gr00t_modality_config_from_file(
+    modality_config_path: str | Path, embodiment_tag: str
+):
     """Load the modality configs using GR00T's pattern.
     1. Import the config module (registers it globally)
     2. Retrieve from the global registry using embodiment_tag
@@ -216,39 +228,32 @@ def load_gr00t_modality_config_from_file(modality_config_path: str | Path, embod
         matching_tags = [tag for tag in EmbodimentTag if tag.name == embodiment_tag_str]
         if not matching_tags:
             available_tags = [tag.name for tag in EmbodimentTag]
-            raise ValueError(f"Invalid embodiment tag '{embodiment_tag}'. Available tags: {available_tags}")
+            raise ValueError(
+                f"Invalid embodiment tag '{embodiment_tag}'. Available tags: {available_tags}"
+            )
         embodiment_tag_enum = matching_tags[0]
 
     # Use the enum's value (lowercase string) to look up in MODALITY_CONFIGS
     embodiment_tag_key = embodiment_tag_enum.value
 
-    # TODO(xinjieyao, 2026-04-27): to be refactored after adding gr00t remote policy
-    if modality_config_path and embodiment_tag_key not in MODALITY_CONFIGS:
-        # Import the user's modality config module for its side-effect of
-        # registering entries into MODALITY_CONFIGS.
-        #
-        # Prefer GR00T's own helper when available (full GR00T container),
-        # but fall back to an inlined copy so the base container — which
-        # ships GR00T as source only and does not install training deps
-        # like tyro — still works.
-        try:
-            from gr00t.experiment.launch_finetune import load_modality_config
+    # TODO(xinjieyao, 2026-04-27): to be refactored after adding gr00t remote policy.
+    # Explicit config paths must win even when another NEW_EMBODIMENT config was
+    # registered earlier in the same Python process.
+    if modality_config_path:
+        import importlib.util
 
-            load_modality_config(modality_config_path)
-        except ImportError:
-            import importlib.util
+        path = Path(modality_config_path)
+        if not (path.exists() and path.suffix == ".py"):
+            raise FileNotFoundError(
+                f"Modality config path does not exist: {modality_config_path}"
+            )
 
-            path = Path(modality_config_path)
-            if not (path.exists() and path.suffix == ".py"):
-                raise FileNotFoundError(f"Modality config path does not exist: {modality_config_path}")
-            # Load by file location so we (a) don't mutate sys.path and (b) always
-            # execute the module body — register_modality_config() runs every call,
-            # rather than being skipped on a sys.modules cache hit.
-            spec = importlib.util.spec_from_file_location(path.stem, path)
-            if spec is None or spec.loader is None:
-                raise ImportError(f"Could not load modality config from {path}")
-            module = importlib.util.module_from_spec(spec)
-            spec.loader.exec_module(module)
+        MODALITY_CONFIGS.pop(embodiment_tag_key, None)
+        spec = importlib.util.spec_from_file_location(path.stem, path)
+        if spec is None or spec.loader is None:
+            raise ImportError(f"Could not load modality config from {path}")
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
 
     if embodiment_tag_key not in MODALITY_CONFIGS:
         raise ValueError(

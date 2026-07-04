@@ -19,9 +19,16 @@ from typing import Any
 
 from gr00t.policy.server_client import PolicyClient as Gr00tPolicyClient
 
-from isaaclab_arena.policy.action_scheduling import ActionChunkScheduler, ActionScheduler, SyncedBatchActionScheduler
+from isaaclab_arena.policy.action_scheduling import (
+    ActionChunkScheduler,
+    ActionScheduler,
+    SyncedBatchActionScheduler,
+)
 from isaaclab_arena.policy.policy_base import PolicyBase
-from isaaclab_arena_gr00t.policy.config.gr00t_closedloop_policy_config import Gr00tClosedloopPolicyConfig, TaskMode
+from isaaclab_arena_gr00t.policy.config.gr00t_closedloop_policy_config import (
+    Gr00tClosedloopPolicyConfig,
+    TaskMode,
+)
 from isaaclab_arena_gr00t.policy.gr00t_core import (
     Gr00tBasePolicyArgs,
     build_gr00t_action_tensor,
@@ -36,7 +43,10 @@ from isaaclab_arena_gr00t.streaming.gr00t_eef_ikstream_bridge import (
     create_ikstreamer_bridge_from_args,
     stream_env_action_to_ikstreamer,
 )
-from isaaclab_arena_gr00t.utils.io_utils import create_config_from_yaml, load_gr00t_modality_config_from_file
+from isaaclab_arena_gr00t.utils.io_utils import (
+    create_config_from_yaml,
+    load_gr00t_modality_config_from_file,
+)
 
 
 # TODO(xinjieyao, 2026-04-27): consider adding RemotePolicyArgs to inherit from BasePolicyArgs
@@ -49,15 +59,33 @@ class Gr00tRemoteClosedloopPolicyArgs(Gr00tBasePolicyArgs):
     and adds remote server connection parameters and num_envs.
     """
 
-    num_envs: int = field(default=1, metadata={"help": "Number of environments to simulate"})
-    remote_host: str = field(default="localhost", metadata={"help": "GR00T policy server hostname"})
-    remote_port: int = field(default=5555, metadata={"help": "GR00T policy server port"})
-    remote_api_token: str | None = field(default=None, metadata={"help": "API token for the policy server"})
-    stream_ikstreamer: bool = field(default=False, metadata={"help": "Mirror actions to RDX IK streamer"})
-    ikstreamer_host: str = field(default="127.0.0.1", metadata={"help": "RDX IK streamer host"})
-    ikstreamer_port: int = field(default=2102, metadata={"help": "RDX IK streamer port"})
-    debug_ikstreamer: bool = field(default=False, metadata={"help": "Print streamed poses to console"})
-    ikstreamer_yaw_offset: float = field(default=0.0, metadata={"help": "Yaw offset for streamed poses"})
+    num_envs: int = field(
+        default=1, metadata={"help": "Number of environments to simulate"}
+    )
+    remote_host: str = field(
+        default="localhost", metadata={"help": "GR00T policy server hostname"}
+    )
+    remote_port: int = field(
+        default=5555, metadata={"help": "GR00T policy server port"}
+    )
+    remote_api_token: str | None = field(
+        default=None, metadata={"help": "API token for the policy server"}
+    )
+    stream_ikstreamer: bool = field(
+        default=False, metadata={"help": "Mirror actions to RDX IK streamer"}
+    )
+    ikstreamer_host: str = field(
+        default="127.0.0.1", metadata={"help": "RDX IK streamer host"}
+    )
+    ikstreamer_port: int = field(
+        default=2102, metadata={"help": "RDX IK streamer port"}
+    )
+    debug_ikstreamer: bool = field(
+        default=False, metadata={"help": "Print streamed poses to console"}
+    )
+    ikstreamer_yaw_offset: float = field(
+        default=0.0, metadata={"help": "Yaw offset for streamed poses"}
+    )
 
     @classmethod
     def from_cli_args(cls, args: argparse.Namespace) -> Gr00tRemoteClosedloopPolicyArgs:
@@ -117,7 +145,9 @@ class Gr00tRemoteClosedloopPolicy(PolicyBase):
         )
 
         # Action / chunk shapes
-        self.action_dim = compute_action_dim(self.task_mode, self.robot_action_joints_config)
+        self.action_dim = compute_action_dim(
+            self.task_mode, self.robot_action_joints_config
+        )
         self.action_chunk_length = self.policy_config.action_chunk_length
 
         self._chunking_state: ActionScheduler | None = action_scheduler_cls(
@@ -138,12 +168,16 @@ class Gr00tRemoteClosedloopPolicy(PolicyBase):
         )
         self._client: Gr00tPolicyClient | None = client
         if not client.ping():
-            raise ConnectionError(f"Cannot reach GR00T policy server at {config.remote_host}:{config.remote_port}")
+            raise ConnectionError(
+                f"Cannot reach GR00T policy server at {config.remote_host}:{config.remote_port}"
+            )
 
         self.task_description: str | None = None
 
         # Optional RDX IK streamer
-        self._ikstreamer_bridge: IKStreamerBridge | None = create_ikstreamer_bridge_from_args(config)
+        self._ikstreamer_bridge: IKStreamerBridge | None = (
+            create_ikstreamer_bridge_from_args(config)
+        )
         self._ikstreamer_dim_mismatch_warned = [False]
 
     # ---------------------- CLI helpers -------------------
@@ -166,9 +200,21 @@ class Gr00tRemoteClosedloopPolicy(PolicyBase):
             default="cuda",
             help="Device for Arena-side tensor operations (default: cuda)",
         )
-        group.add_argument("--remote_host", type=str, default="localhost", help="GR00T policy server hostname")
-        group.add_argument("--remote_port", type=int, default=5555, help="GR00T policy server port")
-        group.add_argument("--remote_api_token", type=str, default=None, help="API token for the policy server")
+        group.add_argument(
+            "--remote_host",
+            type=str,
+            default="localhost",
+            help="GR00T policy server hostname",
+        )
+        group.add_argument(
+            "--remote_port", type=int, default=5555, help="GR00T policy server port"
+        )
+        group.add_argument(
+            "--remote_api_token",
+            type=str,
+            default=None,
+            help="API token for the policy server",
+        )
         add_ikstreamer_cli_args(parser)
         group.add_argument(
             "--scheduler",
@@ -210,7 +256,9 @@ class Gr00tRemoteClosedloopPolicy(PolicyBase):
         assert self._chunking_state is not None, "GR00T remote policy has been closed"
 
         def fetch_chunk() -> torch.Tensor:
-            return self._get_action_chunk(observation, self.policy_config.pov_cam_name_sim)
+            return self._get_action_chunk(
+                observation, self.policy_config.pov_cam_name_sim
+            )
 
         actions = self._chunking_state.get_action(
             fetch_chunk,
@@ -231,8 +279,12 @@ class Gr00tRemoteClosedloopPolicy(PolicyBase):
     def _extract_hold_action(self, observation: dict[str, Any]) -> torch.Tensor:
         """Build the action vector that waiting envs should hold: their current sim joint positions
         copied into the action slots that share a joint name with the state config."""
-        joint_pos_sim = observation["policy"]["robot_joint_pos"].to(device=self.device, dtype=torch.float)
-        hold_action = torch.zeros((self.num_envs, self.action_dim), dtype=torch.float, device=self.device)
+        joint_pos_sim = observation["policy"]["robot_joint_pos"].to(
+            device=self.device, dtype=torch.float
+        )
+        hold_action = torch.zeros(
+            (self.num_envs, self.action_dim), dtype=torch.float, device=self.device
+        )
         for joint_name, action_idx in self.robot_action_joints_config.items():
             state_idx = self.robot_state_joints_config.get(joint_name)
             if state_idx is not None:
@@ -240,7 +292,9 @@ class Gr00tRemoteClosedloopPolicy(PolicyBase):
         return hold_action
 
     def _get_action_chunk(
-        self, observation: dict[str, Any], camera_names: list[str] | str = "robot_head_cam_rgb"
+        self,
+        observation: dict[str, Any],
+        camera_names: list[str] | str = "robot_head_cam_rgb",
     ) -> torch.Tensor:
         """Get an action chunk from the remote GR00T server.
 
@@ -252,7 +306,9 @@ class Gr00tRemoteClosedloopPolicy(PolicyBase):
         # 1. Reuse the same obs translation as local policy
         assert self.task_description is not None, "Task description is not set"
         assert self._client is not None, "GR00T remote policy has been closed"
-        rgb_list_np, joint_pos_sim_np = extract_obs_numpy_from_torch(nested_obs=observation, camera_names=camera_names)
+        rgb_list_np, joint_pos_sim_np, eef_pose_np = extract_obs_numpy_from_torch(
+            nested_obs=observation, camera_names=camera_names
+        )
         policy_observations = build_gr00t_policy_observations(
             rgb_list_np=rgb_list_np,
             joint_pos_sim_np=joint_pos_sim_np,
@@ -261,6 +317,7 @@ class Gr00tRemoteClosedloopPolicy(PolicyBase):
             robot_state_joints_config=self.robot_state_joints_config,
             policy_joints_config=self.policy_joints_config,
             modality_configs=self.modality_configs,
+            eef_pose_policy=eef_pose_np,
         )
 
         # 2. Call GR00T's own client
@@ -276,7 +333,10 @@ class Gr00tRemoteClosedloopPolicy(PolicyBase):
             embodiment_tag=self.policy_config.embodiment_tag,
         )
 
-        assert action_tensor.shape[0] == self.num_envs and action_tensor.shape[1] >= self.action_chunk_length
+        assert (
+            action_tensor.shape[0] == self.num_envs
+            and action_tensor.shape[1] >= self.action_chunk_length
+        )
         return action_tensor
 
     def reset(self, env_ids: torch.Tensor | None = None):

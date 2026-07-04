@@ -4,8 +4,11 @@
 # Required env:
 #   HF_TOKEN          HuggingFace token with write access (unless SKIP_UPLOAD=1)
 # Optional env (defaults shown):
-#   HF_DATASET_ID     H2Ozone/alex_microwave        dataset repo to download
-#   HF_MODEL_REPO     H2Ozone/alex_open_microwave_gr00t   model repo to upload to
+#   HF_DATASET_ID     H2Ozone/lever_eef      dataset repo to download
+#   HF_MODEL_REPO     H2Ozone/lever_eef_gr00t   model repo to upload to
+#   MODALITY_CONFIG   alex_lever_eef_data_config.py  GR00T modality config path
+#   MODALITY_TEMPLATE alex_lever_eef_modality.json   modality.json for v3 conversion
+#   ACTION_FROM_STATE_DIMS  ""      optional action dims filled from state at conversion
 #   SKIP_UPLOAD       0     set 1 to train without uploading
 #   UPLOAD_OPTIMIZER_STATE  0     set 1 to also upload optimizer/scheduler/rng state
 #   GLOBAL_BATCH_SIZE 8
@@ -17,19 +20,27 @@
 #   LOW_VRAM          0     set 1 for <=16GB GPUs: diffusion head only, batch 2 + accum
 #   USE_LORA          0     set 1 to use LoRA for fine-tuning
 #   LORA_RANK         64    LoRA rank to use if USE_LORA=1
+#   SKIP_DOWNLOAD     0     set 1 when DATASET_PATH is bind-mounted (cluster/local data)
 #   OUTPUT_DIR        /checkpoints  (mount a volume here to survive restarts; training
 #                                    auto-resumes from the last checkpoint it finds)
 
 set -euo pipefail
 
-HF_DATASET_ID="${HF_DATASET_ID:-H2Ozone/alex_generated}"
-HF_MODEL_REPO="${HF_MODEL_REPO:-H2Ozone/alex_open_microwave_gr00t}"
+HF_DATASET_ID="${HF_DATASET_ID:-H2Ozone/lever_eef}"
+HF_MODEL_REPO="${HF_MODEL_REPO:-H2Ozone/lever_eef_gr00t}"
 SKIP_UPLOAD="${SKIP_UPLOAD:-0}"
+SKIP_DOWNLOAD="${SKIP_DOWNLOAD:-0}"
 # Lives under /cache so the dataset download persists with the same volume/bind
 # as the HF model cache (and lands on writable storage on clusters).
-DATASET_PATH="${DATASET_PATH:-/cache/dataset/lerobot}"
+DATASET_DIR_NAME="${HF_DATASET_ID//\//__}"
+DATASET_PATH="${DATASET_PATH:-/cache/dataset/${DATASET_DIR_NAME}}"
 OUTPUT_DIR="${OUTPUT_DIR:-/checkpoints}"
-MODALITY_CONFIG=/workspace/IsaacLab-Arena/isaaclab_arena_gr00t/embodiments/alex/alex_data_config.py
+ARENA_DIR=/workspace/IsaacLab-Arena
+MODALITY_CONFIG="${MODALITY_CONFIG:-${ARENA_DIR}/isaaclab_arena_gr00t/embodiments/alex/alex_lever_eef_data_config.py}"
+MODALITY_TEMPLATE="${MODALITY_TEMPLATE:-${ARENA_DIR}/isaaclab_arena_gr00t/embodiments/alex/alex_lever_eef_modality.json}"
+# H2Ozone/lever_eef has real 36-dim EEF actions; keep them untouched by default.
+# Set e.g. "13:33" only for older datasets with missing command streams.
+ACTION_FROM_STATE_DIMS="${ACTION_FROM_STATE_DIMS:-}"
 BASE_MODEL_PATH="${BASE_MODEL_PATH:-nvidia/GR00T-N1.6-3B}"
 
 MAX_STEPS="${MAX_STEPS:-30000}"
@@ -59,6 +70,9 @@ cd /workspace/Isaac-GR00T
 echo "=== GPU check ==="
 nvidia-smi
 
+[[ -f "${MODALITY_CONFIG}" ]] || { echo "Missing MODALITY_CONFIG: ${MODALITY_CONFIG}"; exit 1; }
+[[ -f "${MODALITY_TEMPLATE}" ]] || { echo "Missing MODALITY_TEMPLATE: ${MODALITY_TEMPLATE}"; exit 1; }
+
 # Fail fast on a bad/missing token before hours of training.
 if [[ "${SKIP_UPLOAD}" != "1" ]]; then
   : "${HF_TOKEN:?Set HF_TOKEN (write access) or SKIP_UPLOAD=1}"
@@ -66,15 +80,36 @@ if [[ "${SKIP_UPLOAD}" != "1" ]]; then
   uv run python /workspace/upload_to_hf.py --verify-only --repo-id "${HF_MODEL_REPO}"
 fi
 
-echo "=== Downloading dataset ${HF_DATASET_ID} -> ${DATASET_PATH} ==="
-uv run python - <<EOF
+if [[ "${SKIP_DOWNLOAD}" == "1" ]]; then
+  echo "=== Using local dataset at ${DATASET_PATH} (SKIP_DOWNLOAD=1) ==="
+else
+  echo "=== Downloading dataset ${HF_DATASET_ID} -> ${DATASET_PATH} ==="
+  uv run python - <<EOF
 from huggingface_hub import snapshot_download
 snapshot_download(repo_id="${HF_DATASET_ID}", repo_type="dataset", local_dir="${DATASET_PATH}")
 EOF
+fi
 
 for sub in meta data videos; do
   [[ -d "${DATASET_PATH}/${sub}" ]] || { echo "Missing ${DATASET_PATH}/${sub} — not a LeRobot dataset"; exit 1; }
 done
+
+# LeRobot v3.0 datasets (chunked parquets, meta/tasks.parquet) must be converted
+# to the episode-per-file layout GR00T's loader reads.
+if [[ ! -f "${DATASET_PATH}/meta/episodes.jsonl" && -f "${DATASET_PATH}/meta/tasks.parquet" ]]; then
+  CONVERTED_PATH="${DATASET_PATH%/}_gr00t"
+  if [[ ! -f "${CONVERTED_PATH}/meta/stats.json" ]]; then
+    echo "=== Converting LeRobot v3 dataset -> ${CONVERTED_PATH} ==="
+    CONVERT_ARGS=(
+      --input_dir "${DATASET_PATH}"
+      --output_dir "${CONVERTED_PATH}"
+      --modality_template "${MODALITY_TEMPLATE}"
+    )
+    [[ -n "${ACTION_FROM_STATE_DIMS}" ]] && CONVERT_ARGS+=(--action_from_state_dims "${ACTION_FROM_STATE_DIMS}")
+    uv run python "${ARENA_DIR}/isaaclab_arena_gr00t/lerobot/convert_lerobot_v3_to_gr00t.py" "${CONVERT_ARGS[@]}"
+  fi
+  DATASET_PATH="${CONVERTED_PATH}"
+fi
 
 mkdir -p "${OUTPUT_DIR}"
 

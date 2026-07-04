@@ -92,8 +92,11 @@ srun --gres=gpu:1 --container-image=ghcr.io#eaozone/alex-gr00t-train:latest \
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `HF_DATASET_ID` | `H2Ozone/alex_microwave` | LeRobot dataset repo to download |
-| `HF_MODEL_REPO` | `H2Ozone/alex_open_microwave_gr00t` | model repo to upload to |
+| `HF_DATASET_ID` | `H2Ozone/lever_eef` | LeRobot dataset repo to download |
+| `HF_MODEL_REPO` | `H2Ozone/lever_eef_gr00t` | model repo to upload to |
+| `MODALITY_CONFIG` | `alex_lever_eef_data_config.py` | GR00T modality config to register |
+| `MODALITY_TEMPLATE` | `alex_lever_eef_modality.json` | `meta/modality.json` template for LeRobot v3 conversion |
+| `ACTION_FROM_STATE_DIMS` | empty | optional `start:end` action slice to overwrite from state during conversion |
 | `SKIP_UPLOAD` | `0` | `1` = train only, no upload |
 | `USE_LORA` | `0` | `1` = use LoRA for fine-tuning |
 | `LORA_RANK` | `64` | LoRA rank (if USE_LORA=1) |

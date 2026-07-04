@@ -27,7 +27,9 @@ import pytest
 pytestmark = pytest.mark.gr00t_policy
 
 
-from isaaclab_arena_gr00t.tests.utils.constants import TestConstants as Gr00tTestConstants
+from isaaclab_arena_gr00t.tests.utils.constants import (
+    TestConstants as Gr00tTestConstants,
+)
 
 NUM_ENVS = 2
 ORIGINAL_HEIGHT = 480
@@ -37,6 +39,8 @@ NUM_SIM_JOINTS = 43  # G1 43-DoF
 ACTION_HORIZON = 50
 ACTION_CHUNK_LENGTH = 50
 EXPECTED_ACTION_DIM = 50  # 43 joints + 3 nav + 1 base height + 3 torso rpy
+NUM_ALEX_STATE_JOINTS = 49
+EXPECTED_ALEX_EEF_ACTION_DIM = 34
 
 # Joint group sizes from gr00t_43dof_joint_space.yaml (must match the YAML).
 POLICY_GROUP_SIZES = {
@@ -57,14 +61,20 @@ POLICY_GROUP_SIZES = {
 def policy_config_yaml():
     """Return the g1 locomanip test config used for Arena-side obs/action translation."""
     return (
-        Gr00tTestConstants.test_data_dir + "/test_g1_locomanip_lerobot/test_g1_locomanip_gr00t_closedloop_config.yaml"
+        Gr00tTestConstants.test_data_dir
+        + "/test_g1_locomanip_lerobot/test_g1_locomanip_gr00t_closedloop_config.yaml"
     )
 
 
 @pytest.fixture
 def synthetic_observation():
     """Env-shaped torch obs: one ego camera + 43 joint positions per env."""
-    rgb = torch.randint(0, 255, (NUM_ENVS, ORIGINAL_HEIGHT, ORIGINAL_WIDTH, NUM_CHANNELS), dtype=torch.uint8)
+    rgb = torch.randint(
+        0,
+        255,
+        (NUM_ENVS, ORIGINAL_HEIGHT, ORIGINAL_WIDTH, NUM_CHANNELS),
+        dtype=torch.uint8,
+    )
     joint_pos = torch.randn(NUM_ENVS, NUM_SIM_JOINTS, dtype=torch.float32)
     return {
         "camera_obs": {"robot_head_cam_rgb": rgb},
@@ -77,9 +87,26 @@ def _make_action_response(num_envs: int, horizon: int) -> dict[str, np.ndarray]:
     response: dict[str, np.ndarray] = {}
     for group, size in POLICY_GROUP_SIZES.items():
         response[group] = np.random.randn(num_envs, horizon, size).astype(np.float32)
-    response["navigate_command"] = np.random.randn(num_envs, horizon, 3).astype(np.float32)
-    response["base_height_command"] = np.random.randn(num_envs, horizon, 1).astype(np.float32)
+    response["navigate_command"] = np.random.randn(num_envs, horizon, 3).astype(
+        np.float32
+    )
+    response["base_height_command"] = np.random.randn(num_envs, horizon, 1).astype(
+        np.float32
+    )
     return response
+
+
+def _make_alex_lever_eef_action_response(
+    num_envs: int, horizon: int
+) -> dict[str, np.ndarray]:
+    """Synthetic Alex lever EEF response: wrist poses, per-hand joints, and neck."""
+    return {
+        "left_wrist_pose": np.random.randn(num_envs, horizon, 7).astype(np.float32),
+        "right_wrist_pose": np.random.randn(num_envs, horizon, 7).astype(np.float32),
+        "left_hand": np.random.randn(num_envs, horizon, 10).astype(np.float32),
+        "right_hand": np.random.randn(num_envs, horizon, 10).astype(np.float32),
+        "neck": np.random.randn(num_envs, horizon, 2).astype(np.float32),
+    }
 
 
 class _FakePolicyClient:
@@ -204,6 +231,88 @@ def test_action_response_is_translated_to_correct_tensor_shape(
     assert action.device.type == "cpu"
 
 
+def test_alex_lever_eef_observation_uses_eef_state_groups(
+    monkeypatch, fake_client_factory
+):
+    """Lever EEF checkpoints expect wrist-pose state, not arm-joint state."""
+    policy_config_yaml = (
+        "isaaclab_arena_gr00t/policy/config/alex_lever_eef_gr00t_closedloop_config.yaml"
+    )
+
+    def _get_alex_action(self, observation: dict[str, Any]):
+        self.last_observation = observation
+        self.get_action_calls += 1
+        return _make_alex_lever_eef_action_response(NUM_ENVS, 16), None
+
+    monkeypatch.setattr(_FakePolicyClient, "get_action", _get_alex_action)
+    clients = fake_client_factory(ping_ok=True)
+    policy = _build_policy(policy_config_yaml)
+    policy.set_task_description("pull the lever")
+
+    zed_left = torch.randint(
+        0,
+        255,
+        (NUM_ENVS, ORIGINAL_HEIGHT, ORIGINAL_WIDTH, NUM_CHANNELS),
+        dtype=torch.uint8,
+    )
+    zed_right = torch.randint(
+        0,
+        255,
+        (NUM_ENVS, ORIGINAL_HEIGHT, ORIGINAL_WIDTH, NUM_CHANNELS),
+        dtype=torch.uint8,
+    )
+    joint_pos = torch.randn(NUM_ENVS, NUM_ALEX_STATE_JOINTS, dtype=torch.float32)
+    left_pos = torch.randn(NUM_ENVS, 3, dtype=torch.float32)
+    left_quat = torch.randn(NUM_ENVS, 4, dtype=torch.float32)
+    right_pos = torch.randn(NUM_ENVS, 3, dtype=torch.float32)
+    right_quat = torch.randn(NUM_ENVS, 4, dtype=torch.float32)
+    observation = {
+        "camera_obs": {
+            "zed_left_cam_rgb": zed_left,
+            "zed_right_cam_rgb": zed_right,
+        },
+        "policy": {
+            "robot_joint_pos": joint_pos,
+            "left_eef_pos": left_pos,
+            "left_eef_quat": left_quat,
+            "right_eef_pos": right_pos,
+            "right_eef_quat": right_quat,
+        },
+    }
+
+    action = policy._get_action_chunk(
+        observation, ["zed_left_cam_rgb", "zed_right_cam_rgb"]
+    )
+
+    assert action.shape == (NUM_ENVS, 16, EXPECTED_ALEX_EEF_ACTION_DIM)
+    sent = clients[0].last_observation
+    assert sent is not None
+    assert set(sent["state"].keys()) == {
+        "left_wrist_pose",
+        "right_wrist_pose",
+        "left_hand",
+        "right_hand",
+        "neck",
+    }
+    np.testing.assert_allclose(
+        sent["state"]["left_wrist_pose"][:, 0, :],
+        torch.cat([left_pos, left_quat], dim=-1).numpy(),
+    )
+    np.testing.assert_allclose(
+        sent["state"]["right_wrist_pose"][:, 0, :],
+        torch.cat([right_pos, right_quat], dim=-1).numpy(),
+    )
+    np.testing.assert_allclose(
+        sent["state"]["left_hand"][:, 0, :], joint_pos[:, 29:39].numpy()
+    )
+    np.testing.assert_allclose(
+        sent["state"]["right_hand"][:, 0, :], joint_pos[:, 39:49].numpy()
+    )
+    np.testing.assert_allclose(
+        sent["state"]["neck"][:, 0, :], joint_pos[:, 13:15].numpy()
+    )
+
+
 def test_reset_propagates_to_client(policy_config_yaml, fake_client_factory):
     clients = fake_client_factory(ping_ok=True)
     policy = _build_policy(policy_config_yaml)
@@ -212,7 +321,9 @@ def test_reset_propagates_to_client(policy_config_yaml, fake_client_factory):
     assert clients[0].reset_called is True
 
 
-def test_construction_fails_when_server_unreachable(policy_config_yaml, fake_client_factory):
+def test_construction_fails_when_server_unreachable(
+    policy_config_yaml, fake_client_factory
+):
     fake_client_factory(ping_ok=False)
     with pytest.raises(ConnectionError):
         _build_policy(policy_config_yaml)
@@ -221,7 +332,9 @@ def test_construction_fails_when_server_unreachable(policy_config_yaml, fake_cli
 # ---------------- scheduler-switch tests ---------------- #
 
 
-@pytest.mark.parametrize("scheduler_cls_name", ["ActionChunkScheduler", "SyncedBatchActionScheduler"])
+@pytest.mark.parametrize(
+    "scheduler_cls_name", ["ActionChunkScheduler", "SyncedBatchActionScheduler"]
+)
 def test_get_action_returns_correct_shape_for_each_scheduler(
     policy_config_yaml, synthetic_observation, fake_client_factory, scheduler_cls_name
 ):
@@ -247,11 +360,14 @@ def test_synced_batch_holds_joint_position_for_env_after_partial_reset(
     policy_config_yaml, synthetic_observation, fake_client_factory
 ):
     """After resetting a single env, SyncedBatchActionScheduler should hold that env on
-    the joint-position-derived hold_action while the others continue stepping their chunk."""
+    the joint-position-derived hold_action while the others continue stepping their chunk.
+    """
     from isaaclab_arena.policy.action_scheduling import SyncedBatchActionScheduler
 
     clients = fake_client_factory(ping_ok=True)
-    policy = _build_policy(policy_config_yaml, action_scheduler_cls=SyncedBatchActionScheduler)
+    policy = _build_policy(
+        policy_config_yaml, action_scheduler_cls=SyncedBatchActionScheduler
+    )
     policy.set_task_description("pick up the brown box")
 
     # Step 1: every env needs a chunk → exactly one fetch.

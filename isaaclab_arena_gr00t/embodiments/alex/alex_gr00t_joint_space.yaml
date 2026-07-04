@@ -23,6 +23,9 @@ joints:
     - SPINE_Z
     - NECK_Z
     - NECK_Y
+  neck:
+    - NECK_Z
+    - NECK_Y
   left_arm:
     - LEFT_SHOULDER_Y
     - LEFT_SHOULDER_X

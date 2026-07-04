@@ -32,9 +32,16 @@ from isaaclab_arena_g1.g1_whole_body_controller.wbc_policy.policy.policy_constan
     NUM_NAVIGATE_CMD,
     NUM_TORSO_ORIENTATION_RPY_CMD,
 )
-from isaaclab_arena_gr00t.policy.config.gr00t_closedloop_policy_config import Gr00tClosedloopPolicyConfig, TaskMode
+from isaaclab_arena_gr00t.policy.config.gr00t_closedloop_policy_config import (
+    Gr00tClosedloopPolicyConfig,
+    TaskMode,
+)
 from isaaclab_arena_gr00t.utils.image_conversion import resize_frames_with_padding
-from isaaclab_arena_gr00t.utils.io_utils import load_robot_joints_config_from_yaml, to_numpy, to_tensor
+from isaaclab_arena_gr00t.utils.io_utils import (
+    load_robot_joints_config_from_yaml,
+    to_numpy,
+    to_tensor,
+)
 from isaaclab_arena_gr00t.utils.joints_conversion import (
     filter_policy_joints_config_for_modality_keys,
     remap_policy_joints_to_sim_joints_np,
@@ -85,13 +92,21 @@ def load_gr00t_joint_configs(
         A 3-tuple of (policy_joints_config, robot_action_joints_config,
         robot_state_joints_config), each a joint-name -> config dict.
     """
-    policy_joints_config = load_robot_joints_config_from_yaml(policy_config.policy_joints_config_path)
-    robot_action_joints_config = load_robot_joints_config_from_yaml(policy_config.action_joints_config_path)
-    robot_state_joints_config = load_robot_joints_config_from_yaml(policy_config.state_joints_config_path)
+    policy_joints_config = load_robot_joints_config_from_yaml(
+        policy_config.policy_joints_config_path
+    )
+    robot_action_joints_config = load_robot_joints_config_from_yaml(
+        policy_config.action_joints_config_path
+    )
+    robot_state_joints_config = load_robot_joints_config_from_yaml(
+        policy_config.state_joints_config_path
+    )
     return policy_joints_config, robot_action_joints_config, robot_state_joints_config
 
 
-def compute_action_dim(task_mode: TaskMode, robot_action_joints_config: dict[str, Any]) -> int:
+def compute_action_dim(
+    task_mode: TaskMode, robot_action_joints_config: dict[str, Any]
+) -> int:
     """Compute the total action dimension for the given task mode and joints.
 
     For locomanipulation, adds WBC command dimensions (navigate, base height,
@@ -106,7 +121,9 @@ def compute_action_dim(task_mode: TaskMode, robot_action_joints_config: dict[str
     """
     action_dim = len(robot_action_joints_config)
     if task_mode == TaskMode.G1_LOCOMANIPULATION:
-        action_dim += NUM_NAVIGATE_CMD + NUM_BASE_HEIGHT_CMD + NUM_TORSO_ORIENTATION_RPY_CMD
+        action_dim += (
+            NUM_NAVIGATE_CMD + NUM_BASE_HEIGHT_CMD + NUM_TORSO_ORIENTATION_RPY_CMD
+        )
     return action_dim
 
 
@@ -162,9 +179,42 @@ def _extract_joints_from_nested_obs(
         (N, num_joints) array in sim joint order.
     """
     assert group_key in nested_obs, f"{group_key} is not in observation"
-    assert joint_pos_name in nested_obs[group_key], f"{joint_pos_name} is not in {group_key}"
+    assert (
+        joint_pos_name in nested_obs[group_key]
+    ), f"{joint_pos_name} is not in {group_key}"
     val = nested_obs[group_key][joint_pos_name]
     return to_numpy(val) if convert_to_numpy else val
+
+
+def _extract_eef_poses_from_nested_obs(
+    nested_obs: dict[str, Any],
+    group_key: str = "policy",
+    convert_to_numpy: bool = True,
+) -> dict[str, np.ndarray]:
+    """Extract optional wrist pose state groups from policy observations.
+
+    Alex EEF datasets train on ``left_wrist_pose`` / ``right_wrist_pose`` state
+    groups instead of arm joint angles. Those groups are available in the env as
+    separate position and quaternion observation terms.
+    """
+    if group_key not in nested_obs:
+        return {}
+
+    pose_specs = {
+        "left_wrist_pose": ("left_eef_pos", "left_eef_quat"),
+        "right_wrist_pose": ("right_eef_pos", "right_eef_quat"),
+    }
+    eef_poses: dict[str, np.ndarray] = {}
+    obs_group = nested_obs[group_key]
+    for group_name, (pos_key, quat_key) in pose_specs.items():
+        if pos_key not in obs_group or quat_key not in obs_group:
+            continue
+        pos = to_numpy(obs_group[pos_key]) if convert_to_numpy else obs_group[pos_key]
+        quat = (
+            to_numpy(obs_group[quat_key]) if convert_to_numpy else obs_group[quat_key]
+        )
+        eef_poses[group_name] = np.concatenate([pos, quat], axis=-1)
+    return eef_poses
 
 
 def extract_obs_numpy_from_torch(
@@ -173,7 +223,7 @@ def extract_obs_numpy_from_torch(
     camera_group_key: str = "camera_obs",
     joint_group_key: str = "policy",
     joint_pos_name: str = "robot_joint_pos",
-) -> tuple[list[np.ndarray], np.ndarray]:
+) -> tuple[list[np.ndarray], np.ndarray, dict[str, np.ndarray]]:
     """Convert torch env observation to numpy for the closed-loop pipeline.
 
     Single torch-to-numpy boundary; downstream core logic is numpy-only.
@@ -189,16 +239,26 @@ def extract_obs_numpy_from_torch(
     Returns:
         rgb_list_np: List of (N, H, W, C) uint8 numpy arrays, one per camera.
         joint_pos_sim_np: (N, num_joints) float64 numpy array in sim joint order.
+        eef_pose_np: Optional wrist pose state groups keyed by GR00T modality name.
 
     """
 
     rgb_list_np = _extract_rgb_from_nested_obs(
-        nested_obs=nested_obs, camera_names=camera_names, group_key=camera_group_key, convert_to_numpy=True
+        nested_obs=nested_obs,
+        camera_names=camera_names,
+        group_key=camera_group_key,
+        convert_to_numpy=True,
     )
     joint_pos_sim_np = _extract_joints_from_nested_obs(
-        nested_obs=nested_obs, group_key=joint_group_key, joint_pos_name=joint_pos_name, convert_to_numpy=True
+        nested_obs=nested_obs,
+        group_key=joint_group_key,
+        joint_pos_name=joint_pos_name,
+        convert_to_numpy=True,
     )
-    return rgb_list_np, joint_pos_sim_np
+    eef_pose_np = _extract_eef_poses_from_nested_obs(
+        nested_obs=nested_obs, group_key=joint_group_key, convert_to_numpy=True
+    )
+    return rgb_list_np, joint_pos_sim_np, eef_pose_np
 
 
 # --------------------------------------------------------------------------- #
@@ -240,11 +300,12 @@ def build_gr00t_policy_observations(
     robot_state_joints_config: dict[str, Any],
     policy_joints_config: dict[str, Any],
     modality_configs: dict[str, Any],
+    eef_pose_policy: dict[str, np.ndarray] | None = None,
 ) -> dict[str, Any]:
     """Build GR00T policy observation dict from numpy env observations.
 
-    Resizes RGB, remaps sim joints to policy order, then fills language / video /
-    state keys from modality config. No torch; use after
+    Resizes RGB, remaps sim joints to policy order, merges optional EEF wrist
+    pose observations, then fills language / video / state keys from modality config. No torch; use after
     :func:`extract_obs_numpy_from_torch`.
 
     Args:
@@ -255,6 +316,7 @@ def build_gr00t_policy_observations(
         robot_state_joints_config: State joint name->index for sim order.
         policy_joints_config: Policy group name->list of joint names.
         modality_configs: Dict with "language", "video", "state" modality configs.
+        eef_pose_policy: Optional policy state groups already expressed in GR00T modality order.
 
     Returns:
         Nested dict "language" / "video" / "state" with keys from modality
@@ -262,12 +324,16 @@ def build_gr00t_policy_observations(
     """
     target_image_size = getattr(policy_config, "target_image_size", None)
     if target_image_size is not None:
-        rgb_list_np = resize_rgb_for_policy(rgb_list_np=rgb_list_np, target_image_size=target_image_size)
+        rgb_list_np = resize_rgb_for_policy(
+            rgb_list_np=rgb_list_np, target_image_size=target_image_size
+        )
     language_keys = modality_configs["language"].modality_keys
     video_keys = modality_configs["video"].modality_keys
     state_keys = modality_configs["state"].modality_keys
+    eef_pose_policy = eef_pose_policy or {}
+    joint_state_keys = [key for key in state_keys if key not in eef_pose_policy]
     state_policy_joints_config = filter_policy_joints_config_for_modality_keys(
-        state_keys, policy_joints_config
+        joint_state_keys, policy_joints_config
     )
     joint_pos_state_policy = remap_sim_joints_to_policy_joints_from_np(
         joint_pos_sim_np, robot_state_joints_config, state_policy_joints_config
@@ -287,15 +353,26 @@ def build_gr00t_policy_observations(
     for i, video_key in enumerate(video_keys):
 
         policy_observations["video"][video_key] = rgb_list_np[i].reshape(
-            num_envs, 1, target_image_size[0], target_image_size[1], target_image_size[2]
+            num_envs,
+            1,
+            target_image_size[0],
+            target_image_size[1],
+            target_image_size[2],
         )
     for state_key in state_keys:
-        if state_key in joint_pos_state_policy:
+        if state_key in eef_pose_policy:
+            arr = eef_pose_policy[state_key]
+        elif state_key in joint_pos_state_policy:
             arr = joint_pos_state_policy[state_key]
-            assert (
-                arr.shape[0] == num_envs
-            ), f"joint_pos_state_policy[{state_key}] has shape {arr.shape} but expected ({num_envs}, -1)"
-            policy_observations["state"][state_key] = arr.reshape(num_envs, 1, -1)
+        else:
+            raise KeyError(
+                f"State key '{state_key}' cannot be built from EEF observations or"
+                f" policy_joints_config groups {list(policy_joints_config.keys())}"
+            )
+        assert (
+            arr.shape[0] == num_envs
+        ), f"state[{state_key}] has shape {arr.shape} but expected ({num_envs}, -1)"
+        policy_observations["state"][state_key] = arr.reshape(num_envs, 1, -1)
 
     return policy_observations
 
@@ -341,7 +418,9 @@ def build_gr00t_action_np(
         # NOTE(xinjieyao, 2025-09-29): GR00T output does not include
         # torso_orientation_rpy_command; use zeros.
         nav = np.asarray(robot_action_policy["navigate_command"], dtype=np.float64)
-        base_h = np.asarray(robot_action_policy["base_height_command"], dtype=np.float64)
+        base_h = np.asarray(
+            robot_action_policy["base_height_command"], dtype=np.float64
+        )
         torso_rpy = np.zeros_like(nav, dtype=np.float64)
         return np.concatenate([joints_sim_np, nav, base_h, torso_rpy], axis=2)
     elif task_mode in (
