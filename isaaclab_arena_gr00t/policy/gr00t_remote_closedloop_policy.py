@@ -29,6 +29,13 @@ from isaaclab_arena_gr00t.policy.config.gr00t_closedloop_policy_config import (
     Gr00tClosedloopPolicyConfig,
     TaskMode,
 )
+from isaaclab_arena_gr00t.embodiments.alex.alex_lever_eef_frame import (
+    convert_policy_wrist_actions_to_sim,
+    convert_sim_eef_state_to_dataset,
+    reorder_hand_targets_for_pink_ik,
+    uses_lever_eef_frame_bridge,
+    write_lever_eef_neck_targets,
+)
 from isaaclab_arena_gr00t.policy.gr00t_core import (
     Gr00tBasePolicyArgs,
     build_gr00t_action_tensor,
@@ -37,6 +44,7 @@ from isaaclab_arena_gr00t.policy.gr00t_core import (
     extract_obs_numpy_from_torch,
     load_gr00t_joint_configs,
 )
+from isaaclab_arena_gr00t.utils.io_utils import to_tensor
 from isaaclab_arena_gr00t.streaming.gr00t_eef_ikstream_bridge import (
     IKStreamerBridge,
     add_ikstreamer_cli_args,
@@ -180,6 +188,11 @@ class Gr00tRemoteClosedloopPolicy(PolicyBase):
         )
         self._ikstreamer_dim_mismatch_warned = [False]
 
+        self._use_lever_eef_frame_bridge = uses_lever_eef_frame_bridge(
+            self.policy_config.modality_config_path
+        )
+        self._neck_action_chunk: torch.Tensor | None = None
+
     # ---------------------- CLI helpers -------------------
 
     @staticmethod
@@ -257,13 +270,18 @@ class Gr00tRemoteClosedloopPolicy(PolicyBase):
 
         def fetch_chunk() -> torch.Tensor:
             return self._get_action_chunk(
-                observation, self.policy_config.pov_cam_name_sim
+                observation,
+                self.policy_config.pov_cam_name_sim,
+                env=env,
             )
 
         actions = self._chunking_state.get_action(
             fetch_chunk,
             hold_action=self._extract_hold_action(observation),
         )
+
+        if self._use_lever_eef_frame_bridge and self._neck_action_chunk is not None:
+            self._write_neck_for_current_step(env)
 
         if self._ikstreamer_bridge is not None:
             stream_env_action_to_ikstreamer(
@@ -291,10 +309,27 @@ class Gr00tRemoteClosedloopPolicy(PolicyBase):
                 hold_action[:, action_idx] = joint_pos_sim[:, state_idx]
         return hold_action
 
+    def _consumed_chunk_steps(self) -> torch.Tensor:
+        """Per-env index of the action step just returned by the action scheduler."""
+        assert self._chunking_state is not None, "GR00T remote policy has been closed"
+        idx = self._chunking_state.current_action_index.clone()
+        step = idx - 1
+        step[idx == -1] = self.action_chunk_length - 1
+        return step.clamp(min=0)
+
+    def _write_neck_for_current_step(self, env: gym.Env) -> None:
+        assert self._neck_action_chunk is not None
+        steps = self._consumed_chunk_steps()
+        batch_idx = torch.arange(self.num_envs, device=self.device)
+        neck_targets = self._neck_action_chunk[batch_idx, steps]
+        env_mask = getattr(self._chunking_state, "env_requires_new_chunk", None)
+        write_lever_eef_neck_targets(env, neck_targets, env_mask=env_mask)
+
     def _get_action_chunk(
         self,
         observation: dict[str, Any],
         camera_names: list[str] | str = "robot_head_cam_rgb",
+        env: gym.Env | None = None,
     ) -> torch.Tensor:
         """Get an action chunk from the remote GR00T server.
 
@@ -309,6 +344,8 @@ class Gr00tRemoteClosedloopPolicy(PolicyBase):
         rgb_list_np, joint_pos_sim_np, eef_pose_np = extract_obs_numpy_from_torch(
             nested_obs=observation, camera_names=camera_names
         )
+        if self._use_lever_eef_frame_bridge and env is not None and eef_pose_np:
+            eef_pose_np = convert_sim_eef_state_to_dataset(eef_pose_np, env)
         policy_observations = build_gr00t_policy_observations(
             rgb_list_np=rgb_list_np,
             joint_pos_sim_np=joint_pos_sim_np,
@@ -323,6 +360,18 @@ class Gr00tRemoteClosedloopPolicy(PolicyBase):
         # 2. Call GR00T's own client
         robot_action_policy, _ = self._client.get_action(policy_observations)
 
+        if self._use_lever_eef_frame_bridge and env is not None:
+            robot_action_policy = convert_policy_wrist_actions_to_sim(
+                robot_action_policy, env
+            )
+
+        if "neck" in robot_action_policy:
+            self._neck_action_chunk = to_tensor(
+                robot_action_policy["neck"], device=self.device
+            )
+        else:
+            self._neck_action_chunk = None
+
         # 3. Action translation from policy output to sim action tensor
         action_tensor = build_gr00t_action_tensor(
             robot_action_policy=robot_action_policy,
@@ -332,6 +381,11 @@ class Gr00tRemoteClosedloopPolicy(PolicyBase):
             device=self.device,
             embodiment_tag=self.policy_config.embodiment_tag,
         )
+
+        if self._use_lever_eef_frame_bridge and env is not None:
+            # Semantic (real-robot) hand targets must be permuted into the order the
+            # Pink IK action term actually applies its hand block in.
+            action_tensor = reorder_hand_targets_for_pink_ik(action_tensor, env)
 
         assert (
             action_tensor.shape[0] == self.num_envs
@@ -346,6 +400,7 @@ class Gr00tRemoteClosedloopPolicy(PolicyBase):
         assert self._chunking_state is not None, "GR00T remote policy has been closed"
         self._client.reset()
         self._chunking_state.reset(env_ids)
+        self._neck_action_chunk = None
 
     def close(self) -> None:
         """Release Arena-side resources for the remote GR00T policy client."""

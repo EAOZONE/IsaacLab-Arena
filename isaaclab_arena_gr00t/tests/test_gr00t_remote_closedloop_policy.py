@@ -280,8 +280,9 @@ def test_alex_lever_eef_observation_uses_eef_state_groups(
         },
     }
 
+    # Without a live sim env the frame bridge is skipped; obs pass through as sim poses.
     action = policy._get_action_chunk(
-        observation, ["zed_left_cam_rgb", "zed_right_cam_rgb"]
+        observation, ["zed_left_cam_rgb", "zed_right_cam_rgb"], env=None
     )
 
     assert action.shape == (NUM_ENVS, 16, EXPECTED_ALEX_EEF_ACTION_DIM)
@@ -311,6 +312,208 @@ def test_alex_lever_eef_observation_uses_eef_state_groups(
     np.testing.assert_allclose(
         sent["state"]["neck"][:, 0, :], joint_pos[:, 13:15].numpy()
     )
+
+
+def test_alex_lever_eef_hand_actions_reach_action_tensor(
+    monkeypatch, fake_client_factory
+):
+    """Per-side hand groups must fill the 20 finger slots (regression: they were zeroed
+    because group resolution preferred the unified 'hands' group absent from the output)."""
+    from pathlib import Path
+
+    from isaaclab_arena_gr00t.utils.io_utils import load_robot_joints_config_from_yaml
+
+    policy_config_yaml = (
+        "isaaclab_arena_gr00t/policy/config/alex_lever_eef_gr00t_closedloop_config.yaml"
+    )
+    response = _make_alex_lever_eef_action_response(NUM_ENVS, 16)
+
+    def _get_alex_action(self, observation: dict[str, Any]):
+        self.last_observation = observation
+        self.get_action_calls += 1
+        return response, None
+
+    monkeypatch.setattr(_FakePolicyClient, "get_action", _get_alex_action)
+    fake_client_factory(ping_ok=True)
+    policy = _build_policy(policy_config_yaml)
+    policy.set_task_description("pull the lever")
+
+    observation = {
+        "camera_obs": {
+            "zed_left_cam_rgb": torch.zeros(
+                NUM_ENVS, ORIGINAL_HEIGHT, ORIGINAL_WIDTH, NUM_CHANNELS, dtype=torch.uint8
+            ),
+            "zed_right_cam_rgb": torch.zeros(
+                NUM_ENVS, ORIGINAL_HEIGHT, ORIGINAL_WIDTH, NUM_CHANNELS, dtype=torch.uint8
+            ),
+        },
+        "policy": {
+            "robot_joint_pos": torch.randn(NUM_ENVS, NUM_ALEX_STATE_JOINTS, dtype=torch.float32),
+            "left_eef_pos": torch.randn(NUM_ENVS, 3, dtype=torch.float32),
+            "left_eef_quat": torch.randn(NUM_ENVS, 4, dtype=torch.float32),
+            "right_eef_pos": torch.randn(NUM_ENVS, 3, dtype=torch.float32),
+            "right_eef_quat": torch.randn(NUM_ENVS, 4, dtype=torch.float32),
+        },
+    }
+
+    action = policy._get_action_chunk(
+        observation, ["zed_left_cam_rgb", "zed_right_cam_rgb"], env=None
+    )
+
+    policy_groups = load_robot_joints_config_from_yaml(
+        Path("isaaclab_arena_gr00t/embodiments/alex/alex_gr00t_joint_space.yaml")
+    )
+    sim_action_index = load_robot_joints_config_from_yaml(
+        Path(
+            "isaaclab_arena_gr00t/embodiments/alex/alex_34dof_eef_teleop_action_joint_space.yaml"
+        )
+    )
+    for group in ("left_hand", "right_hand"):
+        for policy_idx, joint_name in enumerate(policy_groups[group]):
+            np.testing.assert_allclose(
+                action[:, :, sim_action_index[joint_name]].numpy(),
+                response[group][:, :, policy_idx],
+                rtol=1e-6,
+                err_msg=f"{joint_name} did not pass through to the sim action tensor",
+            )
+
+
+def test_lever_eef_frame_bridge_runs_when_env_provided(
+    monkeypatch, fake_client_factory
+):
+    """With a sim env, lever_eef configs convert wrist state/actions through the frame bridge."""
+    from isaaclab_arena_gr00t.policy import gr00t_remote_closedloop_policy as policy_mod
+
+    policy_config_yaml = (
+        "isaaclab_arena_gr00t/policy/config/alex_lever_eef_gr00t_closedloop_config.yaml"
+    )
+    bridge_calls: list[str] = []
+
+    def _convert_state(eef_pose_policy, env):
+        bridge_calls.append("state")
+        converted = dict(eef_pose_policy)
+        converted["left_wrist_pose"] = converted["left_wrist_pose"] + 1.0
+        return converted
+
+    def _convert_action(robot_action_policy, env):
+        bridge_calls.append("action")
+        return robot_action_policy
+
+    def _reorder_hands(action_tensor, env):
+        bridge_calls.append("hand_reorder")
+        return action_tensor
+
+    monkeypatch.setattr(policy_mod, "convert_sim_eef_state_to_dataset", _convert_state)
+    monkeypatch.setattr(policy_mod, "convert_policy_wrist_actions_to_sim", _convert_action)
+    monkeypatch.setattr(policy_mod, "reorder_hand_targets_for_pink_ik", _reorder_hands)
+
+    def _get_alex_action(self, observation: dict[str, Any]):
+        self.last_observation = observation
+        self.get_action_calls += 1
+        return _make_alex_lever_eef_action_response(NUM_ENVS, 16), None
+
+    monkeypatch.setattr(_FakePolicyClient, "get_action", _get_alex_action)
+    clients = fake_client_factory(ping_ok=True)
+    policy = _build_policy(policy_config_yaml)
+    policy.set_task_description("pull the lever")
+
+    left_pos = torch.zeros(NUM_ENVS, 3, dtype=torch.float32)
+    left_quat = torch.tensor([0.0, 0.0, 0.0, 1.0], dtype=torch.float32).repeat(NUM_ENVS, 1)
+    observation = {
+        "camera_obs": {
+            "zed_left_cam_rgb": torch.zeros(
+                NUM_ENVS, ORIGINAL_HEIGHT, ORIGINAL_WIDTH, NUM_CHANNELS, dtype=torch.uint8
+            ),
+            "zed_right_cam_rgb": torch.zeros(
+                NUM_ENVS, ORIGINAL_HEIGHT, ORIGINAL_WIDTH, NUM_CHANNELS, dtype=torch.uint8
+            ),
+        },
+        "policy": {
+            "robot_joint_pos": torch.randn(NUM_ENVS, NUM_ALEX_STATE_JOINTS, dtype=torch.float32),
+            "left_eef_pos": left_pos,
+            "left_eef_quat": left_quat,
+            "right_eef_pos": left_pos,
+            "right_eef_quat": left_quat,
+        },
+    }
+
+    policy._get_action_chunk(
+        observation,
+        ["zed_left_cam_rgb", "zed_right_cam_rgb"],
+        env=object(),
+    )
+
+    assert bridge_calls == ["state", "action", "hand_reorder"]
+    sent = clients[0].last_observation
+    assert sent is not None
+    np.testing.assert_allclose(sent["state"]["left_wrist_pose"][:, 0, :3], 1.0)
+    assert policy._neck_action_chunk is not None
+    assert policy._neck_action_chunk.shape == (NUM_ENVS, 16, 2)
+
+
+def test_lever_eef_get_action_writes_neck_targets(monkeypatch, fake_client_factory):
+    """Closed-loop get_action applies neck targets from the policy chunk each step."""
+    from isaaclab_arena_gr00t.policy import gr00t_remote_closedloop_policy as policy_mod
+    from isaaclab_arena_gr00t.policy.gr00t_remote_closedloop_policy import (
+        Gr00tRemoteClosedloopPolicy,
+        Gr00tRemoteClosedloopPolicyArgs,
+    )
+
+    policy_config_yaml = (
+        "isaaclab_arena_gr00t/policy/config/alex_lever_eef_gr00t_closedloop_config.yaml"
+    )
+    neck_writes: list[np.ndarray] = []
+
+    def _write_neck(env, neck_targets, env_mask=None):
+        neck_writes.append(np.asarray(neck_targets))
+
+    monkeypatch.setattr(policy_mod, "write_lever_eef_neck_targets", _write_neck)
+    monkeypatch.setattr(policy_mod, "convert_sim_eef_state_to_dataset", lambda eef, env: eef)
+    monkeypatch.setattr(
+        policy_mod, "convert_policy_wrist_actions_to_sim", lambda action, env: action
+    )
+    monkeypatch.setattr(
+        policy_mod, "reorder_hand_targets_for_pink_ik", lambda action, env: action
+    )
+
+    def _get_alex_action(self, observation: dict[str, Any]):
+        return _make_alex_lever_eef_action_response(1, 16), None
+
+    monkeypatch.setattr(_FakePolicyClient, "get_action", _get_alex_action)
+    fake_client_factory(ping_ok=True)
+    args = Gr00tRemoteClosedloopPolicyArgs(
+        policy_config_yaml_path=policy_config_yaml,
+        policy_device="cpu",
+        num_envs=1,
+        remote_host="unused",
+        remote_port=0,
+        remote_api_token=None,
+    )
+    policy = Gr00tRemoteClosedloopPolicy(args)
+    policy.set_task_description("pull the lever")
+
+    observation = {
+        "camera_obs": {
+            "zed_left_cam_rgb": torch.zeros(
+                1, ORIGINAL_HEIGHT, ORIGINAL_WIDTH, NUM_CHANNELS, dtype=torch.uint8
+            ),
+            "zed_right_cam_rgb": torch.zeros(
+                1, ORIGINAL_HEIGHT, ORIGINAL_WIDTH, NUM_CHANNELS, dtype=torch.uint8
+            ),
+        },
+        "policy": {
+            "robot_joint_pos": torch.randn(1, NUM_ALEX_STATE_JOINTS, dtype=torch.float32),
+            "left_eef_pos": torch.zeros(1, 3),
+            "left_eef_quat": torch.tensor([[0.0, 0.0, 0.0, 1.0]]),
+            "right_eef_pos": torch.zeros(1, 3),
+            "right_eef_quat": torch.tensor([[0.0, 0.0, 0.0, 1.0]]),
+        },
+    }
+
+    policy.get_action(env=object(), observation=observation)
+
+    assert len(neck_writes) == 1
+    assert neck_writes[0].shape == (1, 2)
 
 
 def test_reset_propagates_to_client(policy_config_yaml, fake_client_factory):

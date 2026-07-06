@@ -129,6 +129,31 @@ from pathlib import Path
 
 import pandas as pd
 
+# region agent log
+def _agent_debug_log(run_id: str, hypothesis_id: str, location: str, message: str, data: dict) -> None:
+    """Append a single NDJSON debug log line for this debug session."""
+    try:
+        import json
+        import time
+
+        entry = {
+            "sessionId": "228c09",
+            "runId": run_id,
+            "hypothesisId": hypothesis_id,
+            "location": location,
+            "message": message,
+            "data": data,
+            "timestamp": int(time.time() * 1000),
+        }
+        with open("/home/bpratt/IsaacLab-Arena/.cursor/debug-228c09.log", "a", encoding="utf-8") as f:
+            f.write(json.dumps(entry) + "\n")
+    except Exception:
+        # Logging must never break the main control flow.
+        pass
+
+
+# endregion
+
 SOURCE_FEATURE_KEYS = {"state": "observation.state", "action": "action"}
 EEF_ACTION_DIM = 34
 
@@ -153,8 +178,8 @@ _B_INV = {
     ),
 }
 # Pelvis world pose (pos, quat xyzw) in the env the constants were solved in
-# (alex_teleop_sandbox spawn).
-_PELVIS_CALIB = ((-0.4, -0.48682, 0.94296), (0.0, 0.0, 1.0, 0.0))
+# (alex_teleop_sandbox 0-yaw spawn: identity orientation, raw body_quat_w convention).
+_PELVIS_CALIB = ((-0.4, -0.48682, 0.94296), (0.0, 0.0, 0.0, 1.0))
 
 _NECK_MOTORS = ("neck_z", "neck_y")
 _LEFT_HAND_MOTORS = (
@@ -358,13 +383,14 @@ class Calibration:
             _pose_mul(self.world_from_dataset, (raw[:3], raw[3:7])), _B_INV[hand]
         )
         quat_xyzw = pose[1] / np.linalg.norm(pose[1])
-        # The Pink IK action term consumes scalar-first (w, x, y, z) quaternions.
-        return np.concatenate([pose[0], quat_xyzw[[3, 0, 1, 2]]])
+        # Pink IK / Isaac Lab matrix_from_quat expect scalar-last (x, y, z, w).
+        return np.concatenate([pose[0], quat_xyzw])
 
     def sim_pose_to_dataset_pose(
-        self, sim_pose_wxyz: np.ndarray, hand: str
+        self, sim_pose_xyzw: np.ndarray, hand: str
     ) -> np.ndarray:
-        sim_pose = (sim_pose_wxyz[:3], sim_pose_wxyz[3:7][[1, 2, 3, 0]])
+        # Isaac Lab 3.0 body_quat_w is already scalar-last (x, y, z, w).
+        sim_pose = (sim_pose_xyzw[:3], sim_pose_xyzw[3:7])
         dataset_pose = _pose_mul(
             _pose_mul(_pose_inv(self.world_from_dataset), sim_pose),
             _pose_inv(_B_INV[hand]),
@@ -409,8 +435,8 @@ def build_dataset_layout(
 
 def build_calibration(robot, pelvis_id: int) -> Calibration:
     pelvis_p = _to_numpy(robot.data.body_pos_w)[0, pelvis_id].astype(np.float64)
-    pelvis_q_wxyz = _to_numpy(robot.data.body_quat_w)[0, pelvis_id].astype(np.float64)
-    pelvis_now = (pelvis_p, pelvis_q_wxyz[[1, 2, 3, 0]])
+    pelvis_q_xyzw = _to_numpy(robot.data.body_quat_w)[0, pelvis_id].astype(np.float64)
+    pelvis_now = (pelvis_p, pelvis_q_xyzw)
     world_from_dataset = _pose_mul(
         _pose_mul(pelvis_now, _pose_inv(_PELVIS_CALIB)), _A_INV
     )
@@ -459,10 +485,10 @@ def policy_action_to_dataset_frame(
     return frame
 
 
-def get_body_pose_wxyz(robot, body_id: int, env_origin: np.ndarray) -> np.ndarray:
+def get_body_pose_xyzw(robot, body_id: int, env_origin: np.ndarray) -> np.ndarray:
     pos = _to_numpy(robot.data.body_pos_w)[0, body_id].astype(np.float64) - env_origin
-    quat_wxyz = _to_numpy(robot.data.body_quat_w)[0, body_id].astype(np.float64)
-    return np.concatenate([pos, quat_wxyz])
+    quat_xyzw = _to_numpy(robot.data.body_quat_w)[0, body_id].astype(np.float64)
+    return np.concatenate([pos, quat_xyzw])
 
 
 def build_dataset_state_from_sim(
@@ -470,8 +496,8 @@ def build_dataset_state_from_sim(
 ) -> tuple[np.ndarray, dict[str, np.ndarray]]:
     joint_pos = _to_numpy(obs["policy"]["robot_joint_pos"])
     env_origin = _to_numpy(env.scene.env_origins)[0].astype(np.float64)
-    left_pose = get_body_pose_wxyz(handles.robot, handles.left_id, env_origin)
-    right_pose = get_body_pose_wxyz(handles.robot, handles.right_id, env_origin)
+    left_pose = get_body_pose_xyzw(handles.robot, handles.left_id, env_origin)
+    right_pose = get_body_pose_xyzw(handles.robot, handles.right_id, env_origin)
     eef_pose_policy = {
         "left_wrist_pose": calibration.sim_pose_to_dataset_pose(left_pose, "left")[
             None, :
@@ -580,14 +606,14 @@ def write_neck_targets(
 
 
 def target_errors(
-    achieved_pose_wxyz: np.ndarray, target_action_pose_wxyz: np.ndarray
+    achieved_pose_xyzw: np.ndarray, target_action_pose_xyzw: np.ndarray
 ) -> tuple[float, float]:
     pos_err = float(
-        np.linalg.norm(achieved_pose_wxyz[:3] - target_action_pose_wxyz[:3])
+        np.linalg.norm(achieved_pose_xyzw[:3] - target_action_pose_xyzw[:3])
     )
-    quat_target_xyzw = target_action_pose_wxyz[3:7][[1, 2, 3, 0]]
-    quat_achieved_xyzw = achieved_pose_wxyz[3:7][[1, 2, 3, 0]]
-    return pos_err, _quat_angle_deg_xyzw(quat_achieved_xyzw, quat_target_xyzw)
+    return pos_err, _quat_angle_deg_xyzw(
+        achieved_pose_xyzw[3:7], target_action_pose_xyzw[3:7]
+    )
 
 
 def demo_delta_metrics(
@@ -606,7 +632,10 @@ def demo_delta_metrics(
 
 
 def main():
-    from isaaclab_arena.embodiments.alex.alex import ABILITY_HAND_TELEOP_JOINT_ORDER
+    from isaaclab_arena.embodiments.alex.alex import (
+        ABILITY_HAND_JOINT_NAMES_LIST,
+        ABILITY_HAND_TELEOP_JOINT_ORDER,
+    )
 
     dataset_root = Path(args_cli.dataset_path)
     feature_key = SOURCE_FEATURE_KEYS[args_cli.source]
@@ -637,6 +666,25 @@ def main():
     # Mirror that exact call so each dataset channel lands in the slot that drives it.
     _, hand_slot_names = robot.find_joints(ABILITY_HAND_TELEOP_JOINT_ORDER)
     layout = build_dataset_layout(motor_names, hand_slot_names)
+
+    # region agent log
+    # Hypotheses:
+    # H1: Policy/right-hand pinky channels are near-zero even when other fingers close.
+    # H2: Dataset -> action mapping scrambles or drops right-hand pinky channels.
+    # H3: Sim joint positions for right-hand pinky do not track commanded action slots.
+    _agent_debug_log(
+        run_id="pre-run",
+        hypothesis_id="H2",
+        location="playback_lerobot_eef_dataset.main:layout",
+        message="lever_eef layout indices",
+        data={
+            "motor_names_sample": motor_names[:48],
+            "hand_indices": layout.hand_indices,
+            "left_hand_indices": layout.left_hand_indices,
+            "right_hand_indices": layout.right_hand_indices,
+        },
+    )
+    # endregion
 
     neck_ids_list, neck_resolved = robot.find_joints(
         [m.upper() for m in _NECK_MOTORS], preserve_order=True
@@ -703,7 +751,7 @@ def main():
                 pos_errs, rot_errs = [], []
                 demo_pos_deltas, demo_rot_deltas, action_jumps = [], [], []
                 previous_policy_action = None
-                for frame_index, frame in enumerate(track):
+            for frame_index, frame in enumerate(track):
                     recorded_frames = (
                         video_reader.read_frame() if video_reader is not None else None
                     )
@@ -741,6 +789,46 @@ def main():
                             )
                         previous_policy_action = action.copy()
 
+                    # region agent log
+                    if frame_index < 5:
+                        # Log dataset and policy pinky channels for early frames.
+                        right_pinky_q1_name = "right_ability_hand_pinky_q1"
+                        right_pinky_q2_name = "right_ability_hand_pinky_q2"
+                        right_pinky_dataset = {}
+                        for name in (right_pinky_q1_name, right_pinky_q2_name):
+                            idx = layout.motor_index.get(name)
+                            right_pinky_dataset[name] = float(frame[idx]) if idx is not None else None
+
+                        right_pinky_policy = {}
+                        if predicted_frame is not None:
+                            try:
+                                right_indices = layout.right_hand_indices
+                                right_vals = predicted_frame[right_indices]
+                                names = [n for n in ABILITY_HAND_JOINT_NAMES_LIST if n.startswith("right_")]
+                                right_pinky_policy = {
+                                    "right_hand_vec": right_vals.tolist(),
+                                    "names": names,
+                                }
+                            except Exception:
+                                right_pinky_policy = {"error": "could not map right_hand_indices"}
+
+                        # Action hand block indices 14:34 (20 dims).
+                        hand_block = action[14:34].tolist()
+                        _agent_debug_log(
+                            run_id="pre-finger-step",
+                            hypothesis_id="H1",
+                            location="playback_lerobot_eef_dataset.main:frame_loop",
+                            message="lever_eef right-hand pinky channels",
+                            data={
+                                "episode_index": int(episode_index),
+                                "frame_index": int(frame_index),
+                                "right_pinky_dataset": right_pinky_dataset,
+                                "right_pinky_policy": right_pinky_policy,
+                                "hand_block_14_34": hand_block,
+                            },
+                        )
+                    # endregion
+
                     action_t = torch.as_tensor(
                         action, dtype=torch.float32, device=env.device
                     ).unsqueeze(0)
@@ -761,12 +849,40 @@ def main():
                         action_target_marker.update(action_t)
 
                     env_origin = _to_numpy(env.scene.env_origins)[0].astype(np.float64)
-                    achieved_right = get_body_pose_wxyz(
+                    achieved_right = get_body_pose_xyzw(
                         robot, handles.right_id, env_origin
                     )
                     pos_err, rot_err = target_errors(achieved_right, action[7:14])
                     pos_errs.append(pos_err)
                     rot_errs.append(rot_err)
+
+                    # region agent log
+                    if frame_index < 5:
+                        try:
+                            # Sample right-hand finger joint positions after stepping to see if pinky tracks others.
+                            joint_names = ABILITY_HAND_JOINT_NAMES_LIST
+                            joint_ids, resolved = robot.find_joints(joint_names, preserve_order=True)
+                            joint_pos = _to_numpy(robot.data.joint_pos)[0]
+                            right_joint_snapshot = {
+                                name: float(joint_pos[jid])
+                                for name, jid in zip(resolved, joint_ids)
+                                if name.startswith("right_ability_hand_")
+                            }
+                        except Exception:
+                            right_joint_snapshot = {"error": "could not read right-hand joint_pos"}
+
+                        _agent_debug_log(
+                            run_id="post-step",
+                            hypothesis_id="H3",
+                            location="playback_lerobot_eef_dataset.main:post_step",
+                            message="lever_eef right-hand finger joint_pos snapshot",
+                            data={
+                                "episode_index": int(episode_index),
+                                "frame_index": int(frame_index),
+                                "right_joint_snapshot": right_joint_snapshot,
+                            },
+                        )
+                    # endregion
                     if not simulation_app.is_running() or simulation_app.is_exiting():
                         break
                 # IK convergence + calibration + base-sway error, right hand (the working arm).

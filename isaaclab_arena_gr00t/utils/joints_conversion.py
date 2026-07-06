@@ -193,12 +193,18 @@ def remap_policy_joints_to_sim_joints_np(
         (policy_joint_shape[0], policy_joint_shape[1], len(sim_joints_config)),
         dtype=np.float64,
     )
+    # Resolve groups only against groups the policy actually emitted: the joints YAML can
+    # define overlapping layouts (e.g. Alex "hands" vs "left_hand"/"right_hand") and picking
+    # a group absent from the output would silently zero those joints.
+    emitted_joints_config = {
+        group: names for group, names in policy_joints_config.items() if group in policy_joints
+    }
     for joint_name, joint_index in sim_joints_config.items():
-        joint_group = _joint_name_to_policy_group(joint_name, embodiment_tag, policy_joints_config)
+        joint_group = _joint_name_to_policy_group(joint_name, embodiment_tag, emitted_joints_config)
         if joint_group is None:
             continue
-        if joint_group in policy_joints and joint_name in policy_joints_config[joint_group]:
-            gr00t_index = policy_joints_config[joint_group].index(joint_name)
+        if joint_group in policy_joints and joint_name in emitted_joints_config[joint_group]:
+            gr00t_index = emitted_joints_config[joint_group].index(joint_name)
             data[..., joint_index] = np.asarray(policy_joints[joint_group][..., gr00t_index], dtype=np.float64)
     return data
 

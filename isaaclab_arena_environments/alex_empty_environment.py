@@ -38,8 +38,13 @@ from isaaclab_arena_environments.example_environment_base import ExampleEnvironm
 if TYPE_CHECKING:
     from isaaclab_arena.environments.isaaclab_arena_environment import IsaacLabArenaEnvironment
 
-# Pelvis height used by the other fixed-base Alex envs (alex_teleop_sandbox).
-_DEFAULT_SPAWN_POS = (0.0, 0.0, 0.94296)
+# Default Alex spawn matches alex_teleop_sandbox (lever_eef calibration reference frame).
+_DEFAULT_SPAWN_POS = (-0.4, -0.48682, 0.94296)
+
+# Tuned lever-board pose when --usd points at Lever.usd (see Pictures/Screenshots 2026-07-04).
+_LEVER_USD_DEFAULT_POS = (0.4857-0.4, -0.12442-0.48682, 0.74368)
+_LEVER_USD_DEFAULT_YAW = 90.0
+_LEVER_USD_DEFAULT_SCALE = 0.0254
 
 _VALID_ALEX_EMBODIMENTS = (
     "alex_pink",
@@ -76,16 +81,28 @@ class AlexEmptyEnvironment(ExampleEnvironmentBase):
             from isaaclab_arena.assets.object import Object
 
             assert len(args_cli.usd_pos) == 3, f"--usd_pos needs 3 comma-separated values, got {args_cli.usd_pos}"
-            usd_half_yaw = math.radians(args_cli.usd_yaw) / 2.0
+            usd_stem = Path(args_cli.usd).stem.lower()
+            if usd_stem == "lever" and tuple(args_cli.usd_pos) == (0.6, 0.0, 0.9):
+                # Generic default; use the tuned board pose unless the caller overrides it.
+                usd_pos = _LEVER_USD_DEFAULT_POS
+                usd_yaw = _LEVER_USD_DEFAULT_YAW if args_cli.usd_yaw == 0.0 else args_cli.usd_yaw
+                usd_scale = (
+                    _LEVER_USD_DEFAULT_SCALE if args_cli.usd_scale == 1.0 else args_cli.usd_scale
+                )
+            else:
+                usd_pos = tuple(args_cli.usd_pos)
+                usd_yaw = args_cli.usd_yaw
+                usd_scale = args_cli.usd_scale
+            usd_half_yaw = math.radians(usd_yaw) / 2.0
             scene_assets.append(
                 Object(
-                    name=Path(args_cli.usd).stem.lower().replace("(", "_").replace(")", "_"),
+                    name=usd_stem.replace("(", "_").replace(")", "_"),
                     usd_path=args_cli.usd,
                     initial_pose=Pose(
-                        position_xyz=(0.4857, -0.12442, 0.74368),
-                        rotation_xyzw=(0.0, 0.70711, 0.70711, 0),
+                        position_xyz=usd_pos,
+                        rotation_xyzw=(0.0, 0.70711, 0.70711, 0.0),
                     ),
-                    scale=(0.0254, 0.0254, 0.0254),
+                    scale=(usd_scale, usd_scale, usd_scale),
                 )
             )
 
