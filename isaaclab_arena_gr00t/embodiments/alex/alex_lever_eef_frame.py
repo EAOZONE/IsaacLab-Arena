@@ -9,11 +9,17 @@ The lever_eef dataset stores gripper poses in the real robot's world frame using
 hand control frames. Arena's ``alex_v2_ability_hands`` Pink IK action term consumes
 ``LEFT/RIGHT_GRIPPER_Z_LINK`` targets in the env/world frame.
 
-Every quaternion in this stack is **scalar-last (x, y, z, w)**: the lever_eef dataset
-columns (qx, qy, qz, qs), Isaac Lab 3.0 ``body_quat_w`` (``wp.quatf``) and
-``matrix_from_quat``, and the 34-dim Pink IK action vector (``l_quat_x`` … ``l_quat_w``
-at indices 3-6 / 10-13 in the action YAML). No layout conversion happens anywhere in
-this module — poses are split, normalized, and composed as xyzw.
+The lever_eef dataset columns (qx, qy, qz, qs), Isaac Lab 3.0 ``body_quat_w``, and
+``matrix_from_quat`` (used by the Pink IK action term) are all scalar-last (x, y, z, w),
+so the frame math composes poses as xyzw.
+
+The one exception is a fixed quaternion *roll* at the sim boundary: the ``_A_INV`` /
+``_B_INV`` / ``_PELVIS_CALIB`` constants were solved in a pipeline that rolled the wrist
+quaternion by one slot (``xyzw -> wxyz``) before it reached the Pink IK action term, and
+rolled the raw ``body_quat_w`` the other way when producing dataset-frame state. That roll
+is a component relabel, not a rotation, so it cannot be folded into the constants — it is
+reproduced here (``_ROLL_TO_PINK_IK`` / ``_ROLL_FROM_SIM``). Dropping it leaves the wrists
+~180 deg off.
 
 Constants were solved from H2Ozone/lever_fingers FK vs lever_eef pose pairs (see
 ``playback_lerobot_eef_dataset.py`` for the derivation). The pelvis composition keeps
@@ -46,10 +52,21 @@ _B_INV = {
         (-0.178244, -0.374856, -0.909779, 0.003727),
     ),
 }
-# Pelvis world pose (pos, quat xyzw) in alex_teleop_sandbox where constants were solved
-# (its 0-yaw spawn: identity orientation). Must stay in the raw ``body_quat_w`` xyzw
-# convention so it cancels against ``_base_link_pose_in_env`` at the calibration spawn.
-_PELVIS_CALIB = ((-0.4, -0.48682, 0.94296), (0.0, 0.0, 0.0, 1.0))
+# Pelvis world pose in alex_teleop_sandbox where the constants were solved (its 0-yaw
+# spawn: identity ``body_quat_w``). The quaternion is stored in the same rolled layout the
+# solver used (raw ``body_quat_w`` rolled by ``_ROLL_FROM_SIM`` below), so the pelvis terms
+# cancel at the calibration spawn.
+_PELVIS_CALIB = ((-0.4, -0.48682, 0.94296), (0.0, 0.0, 1.0, 0.0))
+
+# The solved _A_INV / _B_INV / _PELVIS_CALIB constants were fit in a pipeline that rolled
+# every wrist quaternion by one slot before it reached the Pink IK action term (and rolled
+# the sim quaternion back the other way when producing dataset-frame state). The roll is a
+# pure component relabel, not a rotation, so it cannot be folded into a constant quaternion —
+# it must be reproduced exactly or the wrist ends up ~180 deg off.
+#   _ROLL_TO_PINK_IK: xyzw -> (w, x, y, z), applied to targets sent to the action term.
+#   _ROLL_FROM_SIM:   inverse, applied to raw body_quat_w before the sim->dataset transform.
+_ROLL_TO_PINK_IK = [3, 0, 1, 2]
+_ROLL_FROM_SIM = [1, 2, 3, 0]
 
 _LEFT_WRIST_KEY = "left_wrist_pose"
 _RIGHT_WRIST_KEY = "right_wrist_pose"
@@ -122,17 +139,20 @@ class LeverEefFrameCalibration:
     world_from_dataset: tuple
 
     def dataset_pose_to_pink_ik_pose(self, dataset_pose7: np.ndarray, hand: str) -> np.ndarray:
-        """Dataset / policy wrist pose -> sim Pink IK target (pos + quat xyzw)."""
+        """Dataset / policy wrist pose -> sim Pink IK target (pos + rolled quat)."""
         pos, quat_xyzw = split_pose7_xyzw(dataset_pose7)
         pose = _pose_mul(_pose_mul(self.world_from_dataset, (pos, quat_xyzw)), _B_INV[hand])
         quat_xyzw = pose[1] / np.linalg.norm(pose[1])
-        return np.concatenate([pose[0], quat_xyzw]).astype(np.float32)
+        # Reproduce the roll the calibration constants were solved with (see _ROLL_TO_PINK_IK).
+        return np.concatenate([pose[0], quat_xyzw[_ROLL_TO_PINK_IK]]).astype(np.float32)
 
     def sim_pose_to_dataset_pose(self, sim_pose7: np.ndarray, hand: str) -> np.ndarray:
         """Sim GRIPPER_Z_LINK pose -> lever_eef dataset state (pos + quat xyzw)."""
-        pos, quat_xyzw = split_pose7_xyzw(sim_pose7)
+        pos, quat = split_pose7_xyzw(sim_pose7)
+        # Undo the Pink IK roll on the raw body_quat_w before the sim->dataset transform.
+        sim_pose = (pos, quat[_ROLL_FROM_SIM])
         dataset_pose = _pose_mul(
-            _pose_mul(_pose_inv(self.world_from_dataset), (pos, quat_xyzw)),
+            _pose_mul(_pose_inv(self.world_from_dataset), sim_pose),
             _pose_inv(_B_INV[hand]),
         )
         quat_xyzw = dataset_pose[1] / np.linalg.norm(dataset_pose[1])
@@ -145,7 +165,8 @@ def build_lever_eef_calibration(env, env_index: int = 0) -> LeverEefFrameCalibra
     if base_pose is None:
         return None
     base_pos, base_quat_xyzw = base_pose
-    pelvis_now = (base_pos, base_quat_xyzw)
+    # Roll body_quat_w into the layout _PELVIS_CALIB / the solver constants use.
+    pelvis_now = (base_pos, np.asarray(base_quat_xyzw)[_ROLL_FROM_SIM])
     world_from_dataset = _pose_mul(_pose_mul(pelvis_now, _pose_inv(_PELVIS_CALIB)), _A_INV)
     return LeverEefFrameCalibration(world_from_dataset=world_from_dataset)
 

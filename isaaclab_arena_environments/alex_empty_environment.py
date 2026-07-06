@@ -42,7 +42,7 @@ if TYPE_CHECKING:
 _DEFAULT_SPAWN_POS = (-0.4, -0.48682, 0.94296)
 
 # Tuned lever-board pose when --usd points at Lever.usd (see Pictures/Screenshots 2026-07-04).
-_LEVER_USD_DEFAULT_POS = (0.4857-0.4, -0.12442-0.48682, 0.74368)
+_LEVER_USD_DEFAULT_POS = (0.01931, -0.61124, 0.90566)
 _LEVER_USD_DEFAULT_YAW = 90.0
 _LEVER_USD_DEFAULT_SCALE = 0.0254
 

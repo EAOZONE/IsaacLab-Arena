@@ -885,20 +885,20 @@ def main():
                     # endregion
                     if not simulation_app.is_running() or simulation_app.is_exiting():
                         break
-                # IK convergence + calibration + base-sway error, right hand (the working arm).
-                summary = (
-                    f"Episode {episode_index} done. Right-hand target error: "
-                    f"mean {np.mean(pos_errs)*1000:.0f} mm pos / {np.mean(rot_errs):.1f} deg rot, "
-                    f"max {np.max(pos_errs)*1000:.0f} mm / {np.max(rot_errs):.1f} deg"
-                )
-                if policy_context is not None and demo_pos_deltas:
-                    summary += (
-                        f"; policy-vs-demo wrist target delta: mean {np.mean(demo_pos_deltas)*1000:.0f} mm /"
-                        f" {np.mean(demo_rot_deltas):.1f} deg"
+                    # IK convergence + calibration + base-sway error, right hand (the working arm).
+                    summary = (
+                        f"Episode {episode_index} done. Right-hand target error: "
+                        f"mean {np.mean(pos_errs)*1000:.0f} mm pos / {np.mean(rot_errs):.1f} deg rot, "
+                        f"max {np.max(pos_errs)*1000:.0f} mm / {np.max(rot_errs):.1f} deg"
                     )
-                    if action_jumps:
-                        summary += f"; mean action jump {np.mean(action_jumps):.3f}"
-                print(summary, flush=True)
+                    if policy_context is not None and demo_pos_deltas:
+                        summary += (
+                            f"; policy-vs-demo wrist target delta: mean {np.mean(demo_pos_deltas)*1000:.0f} mm /"
+                            f" {np.mean(demo_rot_deltas):.1f} deg"
+                        )
+                        if action_jumps:
+                            summary += f"; mean action jump {np.mean(action_jumps):.3f}"
+                    print(summary, flush=True)
             if not args_cli.loop:
                 break
 
