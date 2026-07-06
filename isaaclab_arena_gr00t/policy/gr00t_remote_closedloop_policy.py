@@ -13,6 +13,8 @@ from __future__ import annotations
 
 import argparse
 import gymnasium as gym
+import numpy as np
+import os
 import torch
 from dataclasses import dataclass, field
 from typing import Any
@@ -193,6 +195,31 @@ class Gr00tRemoteClosedloopPolicy(PolicyBase):
         )
         self._neck_action_chunk: torch.Tensor | None = None
 
+        # Policy-rate action pacing: the chunk is trained at ``policy_control_hz`` (e.g. 30) but the
+        # sim steps faster (e.g. 50 Hz). We set the scheduler's zero-order-hold rate on the first
+        # step (when the env's ``step_dt`` is known) so the chunk plays at real speed.
+        self._policy_control_hz = getattr(self.policy_config, "policy_control_hz", None)
+        self._action_rate_set = False
+
+        # ``robot_joint_pos`` is emitted in Isaac Sim's articulation joint order, which is NOT
+        # the block order of ``state_joints_config_path`` (legs/arms/hands interleave left/right
+        # and hand q1s precede q2s). Reading state columns by the static YAML index therefore
+        # scrambles the hand/neck state sent to GR00T. We rebuild the name->column map from the
+        # live ``robot.joint_names`` on the first step and use it for all state indexing.
+        self._live_state_joints_config: dict[str, int] | None = None
+
+        # Opt-in diagnostics: set GR00T_DEBUG_STATE=1 to dump, on the first few chunks,
+        # the exact state groups sent to the server and the live sim joint order. This is
+        # for verifying that Arena's observation matches the training dataset convention
+        # (joint order / frame / units). Disabled by default; no behavior change.
+        self._debug_state = os.environ.get("GR00T_DEBUG_STATE", "") not in ("", "0")
+        self._debug_state_calls_left = int(os.environ.get("GR00T_DEBUG_STATE_CALLS", "2"))
+        self._debug_joint_order_dumped = False
+        # GR00T_DEBUG_ACTIONS=1 logs the per-step applied wrist targets and marks chunk
+        # boundaries, to diagnose non-smooth (retracting) motion across chunk stitches.
+        self._debug_actions = os.environ.get("GR00T_DEBUG_ACTIONS", "") not in ("", "0")
+        self._debug_action_step = 0
+
     # ---------------------- CLI helpers -------------------
 
     @staticmethod
@@ -268,6 +295,9 @@ class Gr00tRemoteClosedloopPolicy(PolicyBase):
     def get_action(self, env: gym.Env, observation: dict[str, Any]) -> torch.Tensor:
         assert self._chunking_state is not None, "GR00T remote policy has been closed"
 
+        self._resolve_state_joints_config(env)
+        self._maybe_set_action_rate(env)
+
         def fetch_chunk() -> torch.Tensor:
             return self._get_action_chunk(
                 observation,
@@ -292,7 +322,70 @@ class Gr00tRemoteClosedloopPolicy(PolicyBase):
                 dim_mismatch_warned=self._ikstreamer_dim_mismatch_warned,
             )
 
+        if self._debug_actions:
+            idx = int(self._chunking_state.current_action_index[0].item())
+            boundary = " <== NEW CHUNK" if idx in (0, 1) else ""
+            a = actions[0].detach().cpu().numpy()
+            print(
+                f"[GR00T_DEBUG_ACTIONS] step={self._debug_action_step:3d} chunk_idx={idx:2d}"
+                f" Lwrist_pos={np.round(a[0:3],4)} Rwrist_pos={np.round(a[7:10],4)}{boundary}",
+                flush=True,
+            )
+            self._debug_action_step += 1
+
         return actions
+
+    def _active_state_joints_config(self) -> dict[str, int]:
+        """State joint name->column map to index ``robot_joint_pos`` with.
+
+        Prefers the live map built from ``robot.joint_names`` (correct order); falls back to
+        the static YAML only before the first ``get_action`` has resolved the env.
+        """
+        return self._live_state_joints_config or self.robot_state_joints_config
+
+    def _maybe_set_action_rate(self, env: gym.Env | None) -> None:
+        """Pace chunk consumption to ``policy_control_hz`` given the sim's step rate.
+
+        Called once (env is needed for ``step_dt``). No-op when ``policy_control_hz`` is unset or
+        the scheduler doesn't support rate control (e.g. synced-batch).
+        """
+        if self._action_rate_set or self._policy_control_hz is None or env is None:
+            return
+        self._action_rate_set = True
+        scheduler = self._chunking_state
+        set_rate = getattr(scheduler, "set_action_rate", None)
+        if set_rate is None:
+            print(
+                "[Gr00tRemoteClosedloopPolicy] policy_control_hz set but scheduler does not support"
+                " rate pacing; ignoring."
+            )
+            return
+        step_dt = float(getattr(env, "unwrapped", env).step_dt)
+        sim_hz = 1.0 / step_dt
+        sim_steps_per_action = sim_hz / float(self._policy_control_hz)
+        set_rate(sim_steps_per_action)
+        print(
+            f"[Gr00tRemoteClosedloopPolicy] action pacing: sim={sim_hz:.1f}Hz,"
+            f" policy={self._policy_control_hz:.1f}Hz -> {sim_steps_per_action:.3f} sim steps/waypoint"
+        )
+
+    def _resolve_state_joints_config(self, env: gym.Env | None) -> None:
+        """Build and cache the state joint name->column map from the live articulation order.
+
+        ``robot_joint_pos`` columns follow ``robot.joint_names`` (Isaac Sim articulation order),
+        not the static ``state_joints_config`` YAML order. We rebuild the map once so that state
+        remapping and hold-action indexing read each joint from its true column.
+        """
+        if self._live_state_joints_config is not None or env is None:
+            return
+        robot = getattr(env, "unwrapped", env).scene["robot"]
+        sim_names = list(robot.joint_names)
+        live = {name: i for i, name in enumerate(sim_names)}
+        missing = [n for n in self.robot_state_joints_config if n not in live]
+        assert not missing, (
+            f"state_joints_config joints missing from sim articulation: {missing}"
+        )
+        self._live_state_joints_config = live
 
     def _extract_hold_action(self, observation: dict[str, Any]) -> torch.Tensor:
         """Build the action vector that waiting envs should hold: their current sim joint positions
@@ -303,8 +396,9 @@ class Gr00tRemoteClosedloopPolicy(PolicyBase):
         hold_action = torch.zeros(
             (self.num_envs, self.action_dim), dtype=torch.float, device=self.device
         )
+        state_joints_config = self._active_state_joints_config()
         for joint_name, action_idx in self.robot_action_joints_config.items():
-            state_idx = self.robot_state_joints_config.get(joint_name)
+            state_idx = state_joints_config.get(joint_name)
             if state_idx is not None:
                 hold_action[:, action_idx] = joint_pos_sim[:, state_idx]
         return hold_action
@@ -351,11 +445,15 @@ class Gr00tRemoteClosedloopPolicy(PolicyBase):
             joint_pos_sim_np=joint_pos_sim_np,
             task_description=self.task_description,
             policy_config=self.policy_config,
-            robot_state_joints_config=self.robot_state_joints_config,
+            robot_state_joints_config=self._active_state_joints_config(),
             policy_joints_config=self.policy_joints_config,
             modality_configs=self.modality_configs,
             eef_pose_policy=eef_pose_np,
         )
+
+        if self._debug_state and self._debug_state_calls_left > 0:
+            self._dump_debug_state(policy_observations, env)
+            self._debug_state_calls_left -= 1
 
         # 2. Call GR00T's own client
         robot_action_policy, _ = self._client.get_action(policy_observations)
@@ -392,6 +490,68 @@ class Gr00tRemoteClosedloopPolicy(PolicyBase):
             and action_tensor.shape[1] >= self.action_chunk_length
         )
         return action_tensor
+
+    # lever_eef dataset (H2Ozone/lever_eef) per-group STATE means, for OOD comparison.
+    _DEBUG_LEVER_EEF_STATE_MEANS = {
+        "left_wrist_pose": [-0.3476, 0.4902, 1.0489, 0.1074, -0.6494, 0.1085, 0.7427],
+        "right_wrist_pose": [-0.1924, -0.1967, 1.1776, 0.1255, -0.7544, 0.2047, 0.5935],
+        "left_hand": [0.604, 1.362, 0.599, 1.357, 0.601, 1.360, 0.388, 1.134, -0.508, 0.004],
+        "right_hand": [1.199, 1.993, 1.204, 1.998, 1.204, 1.998, 1.204, 1.998, -0.236, 0.042],
+        "neck": [-0.2208, 0.4832],
+    }
+
+    def _dump_debug_state(self, policy_observations: dict[str, Any], env: gym.Env | None) -> None:
+        """Print the state groups sent to the server (env 0) vs dataset means, plus sim joint order.
+
+        Enabled with ``GR00T_DEBUG_STATE=1``. Purely diagnostic; helps confirm whether the
+        state Arena feeds matches the training dataset convention (joint order / frame / units).
+        """
+        np.set_printoptions(precision=4, suppress=True, linewidth=200)
+        _p = lambda *a: print(*a, flush=True)  # noqa: E731 - flush so output isn't stuck in pipe buffer
+        _p("\n========== [GR00T_DEBUG_STATE] state sent to server (env 0) ==========")
+        state = policy_observations.get("state", {})
+        for key, arr in state.items():
+            values = np.asarray(arr)[0, 0]
+            ref = self._DEBUG_LEVER_EEF_STATE_MEANS.get(key)
+            line = f"[{key}] sent = {values}"
+            if ref is not None and len(ref) == len(values):
+                ref_arr = np.asarray(ref)
+                line += f"\n    {'dataset_mean':>12} = {ref_arr}"
+                line += f"\n    {'abs_diff':>12} = {np.abs(values - ref_arr)}  (max {np.abs(values - ref_arr).max():.4f})"
+            _p(line)
+
+        if not self._debug_joint_order_dumped and env is not None:
+            self._debug_joint_order_dumped = True
+            try:
+                robot = getattr(env, "unwrapped", env).scene["robot"]
+                sim_names = list(robot.joint_names)
+                cfg_names = sorted(
+                    self.robot_state_joints_config, key=self.robot_state_joints_config.get
+                )
+                _p("\n========== [GR00T_DEBUG_STATE] sim joint order vs state config ==========")
+                _p(f"sim robot.joint_names ({len(sim_names)}):\n{sim_names}")
+                mismatches = [
+                    (i, cfg_names[i], sim_names[i])
+                    for i in range(min(len(sim_names), len(cfg_names)))
+                    if cfg_names[i] != sim_names[i]
+                ]
+                if len(sim_names) != len(cfg_names):
+                    _p(
+                        f"LENGTH MISMATCH: sim has {len(sim_names)} joints, "
+                        f"state config has {len(cfg_names)}."
+                    )
+                if mismatches:
+                    _p(
+                        f"ORDER MISMATCH at {len(mismatches)} positions "
+                        f"(idx: config_name != sim_name) -> state is SCRAMBLED:"
+                    )
+                    for i, cfg_n, sim_n in mismatches:
+                        _p(f"    [{i:2d}] config={cfg_n} != sim={sim_n}")
+                else:
+                    _p("Joint order matches state config positionally (no scramble). OK")
+            except Exception as e:  # noqa: BLE001 - diagnostics must never break rollout
+                _p(f"[GR00T_DEBUG_STATE] could not read sim joint order: {e}")
+        _p("=====================================================================\n")
 
     def reset(self, env_ids: torch.Tensor | None = None):
         if env_ids is None:

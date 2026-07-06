@@ -14,7 +14,10 @@ policy_joints_config_path: isaaclab_arena_gr00t/embodiments/alex/alex_gr00t_join
 action_joints_config_path: isaaclab_arena_gr00t/embodiments/alex/alex_34dof_eef_teleop_action_joint_space.yaml
 state_joints_config_path: isaaclab_arena_gr00t/embodiments/alex/alex_49dof_joint_space.yaml
 
-action_chunk_length: 16
+action_chunk_length: 4
+# The lever_eef dataset was recorded at 30 Hz; the sim steps at 50 Hz. Pace chunk consumption
+# so each waypoint is held ~50/30 sim steps (zero-order hold), playing the chunk at real speed.
+policy_control_hz: 30
 task_mode_name: alex_tabletop_manipulation
 
 pov_cam_name_sim:

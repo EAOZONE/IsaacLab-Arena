@@ -45,6 +45,13 @@ class ActionChunkScheduler(ActionScheduler):
         self.current_action_index = torch.zeros(num_envs, dtype=torch.int32, device=device)
         self.env_requires_new_chunk = torch.ones(num_envs, dtype=torch.bool, device=device)
 
+        # Fractional read head into the chunk, in policy-rate (waypoint) units. Advancing it by
+        # less than 1.0 per step replays each waypoint for multiple sim steps (zero-order hold),
+        # matching an action chunk recorded at a lower rate than the sim runs at. Default 1.0
+        # reproduces the original one-waypoint-per-step behavior exactly.
+        self._float_index = torch.zeros(num_envs, dtype=torch.float32, device=device)
+        self._waypoint_advance: float = 1.0
+
         # Fetch-efficiency tracking: how many times each env triggered a chunk fetch,
         # and how many envs actually needed the fetch vs. total (wasted compute detection).
         self._n_fetch_calls: int = 0
@@ -70,7 +77,7 @@ class ActionChunkScheduler(ActionScheduler):
             new_chunk = fetch_action_tensor_fn()
             mask = self.env_requires_new_chunk
             self.current_action_chunk[mask] = new_chunk[mask]
-            self.current_action_index[mask] = 0
+            self._float_index[mask] = 0.0
             self.env_requires_new_chunk[mask] = False
 
             self._n_fetch_calls += 1
@@ -78,26 +85,40 @@ class ActionChunkScheduler(ActionScheduler):
             self._total_envs_needed += n_needed
             self._per_env_fetch_count[mask] += 1
 
-        assert self.current_action_index.min() >= 0, "At least one env's action index is less than 0"
-        assert (
-            self.current_action_index.max() < self.action_chunk_length
-        ), "At least one env's action index is greater than the action chunk length"
-
-        # Take one action per env at the current index (before incrementing)
+        # Zero-order-hold resample: pick the integer waypoint at the current fractional read
+        # head. With the default advance of 1.0 this is just the sequential index; with a
+        # smaller advance a waypoint is repeated across sim steps so a low-rate chunk plays at
+        # real speed.
+        waypoint = torch.floor(self._float_index).to(torch.long).clamp_(0, self.action_horizon - 1)
         batch_idx = torch.arange(self.num_envs, device=self.device)
-        action = self.current_action_chunk[batch_idx, self.current_action_index]
+        action = self.current_action_chunk[batch_idx, waypoint]
         assert action.shape == (
             self.num_envs,
             self.action_dim,
         ), f"{action.shape=} != ({self.num_envs}, {self.action_dim})"
 
-        self.current_action_index += 1
-        reset_env_ids = self.current_action_index == self.action_chunk_length
-        self.current_action_chunk[reset_env_ids] = 0.0
-        self.env_requires_new_chunk = self.current_action_index >= self.action_chunk_length
-        self.current_action_index[reset_env_ids] = -1
+        # Advance the read head; a chunk is exhausted once action_chunk_length waypoints have
+        # been consumed (in policy-rate units).
+        self._float_index += self._waypoint_advance
+        self.env_requires_new_chunk = self._float_index >= self.action_chunk_length
+
+        # Maintain current_action_index in the historical post-increment / -1 convention so
+        # consumers (e.g. neck writing via _consumed_chunk_steps) keep working unchanged.
+        next_index = (waypoint + 1).to(self.current_action_index.dtype)
+        next_index[self.env_requires_new_chunk] = -1
+        self.current_action_index = next_index
+        self.current_action_chunk[self.env_requires_new_chunk] = 0.0
 
         return action
+
+    def set_action_rate(self, sim_steps_per_action: float) -> None:
+        """Set how many sim steps each chunk waypoint spans (zero-order hold).
+
+        ``sim_steps_per_action = sim_hz / policy_hz`` (e.g. 50/30 ≈ 1.667). A value of 1.0
+        restores one-waypoint-per-step behavior.
+        """
+        assert sim_steps_per_action > 0, "sim_steps_per_action must be positive"
+        self._waypoint_advance = 1.0 / sim_steps_per_action
 
     def reset(self, env_ids: torch.Tensor | slice | None = None) -> None:
         """Reset chunking state for the given envs (all if None)."""
@@ -105,4 +126,5 @@ class ActionChunkScheduler(ActionScheduler):
             env_ids = slice(None)
         self.current_action_chunk[env_ids] = 0.0
         self.current_action_index[env_ids] = -1
+        self._float_index[env_ids] = 0.0
         self.env_requires_new_chunk[env_ids] = True

@@ -80,6 +80,17 @@ class Gr00tClosedloopPolicyConfig:
             "description": "Number of actions to execute per inference rollout (can be less than action_horizon)."
         },
     )
+    policy_control_hz: float | None = field(
+        default=None,
+        metadata={
+            "description": (
+                "Rate (Hz) the action chunk was recorded/trained at (e.g. 30 for the lever_eef dataset)."
+                " When set, the scheduler consumes one waypoint every sim_hz/policy_control_hz sim steps"
+                " (zero-order hold) so the chunk plays at real speed even though the sim steps faster"
+                " (e.g. 50 Hz). Leave None to consume one waypoint per sim step (legacy behavior)."
+            )
+        },
+    )
     seed: int = field(default=10, metadata={"description": "Random seed for reproducibility."})
 
     def __post_init__(self):
