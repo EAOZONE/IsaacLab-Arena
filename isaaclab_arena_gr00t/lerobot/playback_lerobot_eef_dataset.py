@@ -110,6 +110,28 @@ parser.add_argument(
     default=False,
     help="Do not open windows showing the recorded ZED videos.",
 )
+parser.add_argument(
+    "--record_dataset",
+    action="store_true",
+    default=False,
+    help=(
+        "Export each replayed episode via the env's RecorderManager (HDF5), instead of the"
+        " default playback-only mode that disables recording. Convert the result with"
+        " convert_hdf5_to_lerobot.py to get a GR00T-ready dataset."
+    ),
+)
+parser.add_argument(
+    "--record_output_dir",
+    type=str,
+    default="/tmp/isaaclab/logs",
+    help="Directory the RecorderManager exports HDF5 episodes to when --record_dataset is set.",
+)
+parser.add_argument(
+    "--record_dataset_name",
+    type=str,
+    default="lever_eef_sim_replay",
+    help="HDF5 dataset filename (without extension) when --record_dataset is set.",
+)
 add_example_environments_cli_args(parser)
 
 args_cli = parser.parse_args()
@@ -651,7 +673,11 @@ def main():
 
     arena_builder = get_arena_builder_from_cli(args_cli)
     env_name, env_cfg = arena_builder.build_registered()
-    env_cfg.recorders = {}
+    if args_cli.record_dataset:
+        env_cfg.recorders.dataset_export_dir_path = args_cli.record_output_dir
+        env_cfg.recorders.dataset_filename = args_cli.record_dataset_name
+    else:
+        env_cfg.recorders = {}
     env_cfg.terminations = {}
 
     env = gym.make(env_name, cfg=env_cfg)

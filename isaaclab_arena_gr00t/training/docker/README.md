@@ -106,6 +106,8 @@ srun --gres=gpu:1 --container-image=ghcr.io#eaozone/alex-gr00t-train:latest \
 | `NUM_GPUS` | `1` | GPUs to train on |
 | `UPLOAD_OPTIMIZER_STATE` | `0` | `1` = also upload optimizer/scheduler state |
 | `WANDB_API_KEY` + `WANDB_MODE=online` | disabled | enable wandb logging |
+| `COLOR_JITTER_BRIGHTNESS`/`CONTRAST`/`SATURATION`/`HUE` | `0.4`/`0.5`/`0.6`/`0.1` | photometric augmentation strength on training frames |
+| `RANDOM_ROTATION_ANGLE` | `10` | max +/- degrees of random image rotation |
 
 Only the latest `checkpoint-N` is uploaded, under `checkpoint-N/` in the model
 repo, with optimizer state stripped by default.

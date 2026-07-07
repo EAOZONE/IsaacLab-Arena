@@ -15,6 +15,8 @@ RUNTIME_DEPS = [
     "lightwheel-sdk",
     "pytest",
     "pydantic>=2.0",
+    "msgpack",
+    "websockets",
 ]
 
 DEV_DEPS = [

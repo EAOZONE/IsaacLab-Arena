@@ -138,10 +138,14 @@ class LeverEefFrameCalibration:
 
     world_from_dataset: tuple
 
-    def dataset_pose_to_pink_ik_pose(self, dataset_pose7: np.ndarray, hand: str) -> np.ndarray:
+    def dataset_pose_to_pink_ik_pose(
+        self, dataset_pose7: np.ndarray, hand: str
+    ) -> np.ndarray:
         """Dataset / policy wrist pose -> sim Pink IK target (pos + rolled quat)."""
         pos, quat_xyzw = split_pose7_xyzw(dataset_pose7)
-        pose = _pose_mul(_pose_mul(self.world_from_dataset, (pos, quat_xyzw)), _B_INV[hand])
+        pose = _pose_mul(
+            _pose_mul(self.world_from_dataset, (pos, quat_xyzw)), _B_INV[hand]
+        )
         quat_xyzw = pose[1] / np.linalg.norm(pose[1])
         # Reproduce the roll the calibration constants were solved with (see _ROLL_TO_PINK_IK).
         return np.concatenate([pose[0], quat_xyzw[_ROLL_TO_PINK_IK]]).astype(np.float32)
@@ -156,10 +160,18 @@ class LeverEefFrameCalibration:
             _pose_inv(_B_INV[hand]),
         )
         quat_xyzw = dataset_pose[1] / np.linalg.norm(dataset_pose[1])
+        # Canonicalize the quaternion hemisphere (scalar-last w >= 0) to match the training
+        # convention. q and -q are the same rotation, but the lever_eef dataset stored wrist
+        # quats with w >= 0; sending the -q hemisphere makes the state OOD (the policy sees a
+        # sign-flipped orientation it never trained on) and it stops committing to motion.
+        if quat_xyzw[3] < 0.0:
+            quat_xyzw = -quat_xyzw
         return np.concatenate([dataset_pose[0], quat_xyzw]).astype(np.float32)
 
 
-def build_lever_eef_calibration(env, env_index: int = 0) -> LeverEefFrameCalibration | None:
+def build_lever_eef_calibration(
+    env, env_index: int = 0
+) -> LeverEefFrameCalibration | None:
     """Build a live calibration from the robot pelvis pose in ``env``."""
     base_pose = _base_link_pose_in_env(env, env_index)
     if base_pose is None:
@@ -167,7 +179,9 @@ def build_lever_eef_calibration(env, env_index: int = 0) -> LeverEefFrameCalibra
     base_pos, base_quat_xyzw = base_pose
     # Roll body_quat_w into the layout _PELVIS_CALIB / the solver constants use.
     pelvis_now = (base_pos, np.asarray(base_quat_xyzw)[_ROLL_FROM_SIM])
-    world_from_dataset = _pose_mul(_pose_mul(pelvis_now, _pose_inv(_PELVIS_CALIB)), _A_INV)
+    world_from_dataset = _pose_mul(
+        _pose_mul(pelvis_now, _pose_inv(_PELVIS_CALIB)), _A_INV
+    )
     return LeverEefFrameCalibration(world_from_dataset=world_from_dataset)
 
 
@@ -182,7 +196,9 @@ def convert_sim_eef_state_to_dataset(
     num_envs = next(iter(converted.values())).shape[0]
     for env_index in range(num_envs):
         calibration = build_lever_eef_calibration(env, env_index)
-        assert calibration is not None, "Could not resolve PELVIS_LINK for lever_eef frame bridge"
+        assert (
+            calibration is not None
+        ), "Could not resolve PELVIS_LINK for lever_eef frame bridge"
         for hand, key in (("left", _LEFT_WRIST_KEY), ("right", _RIGHT_WRIST_KEY)):
             if key not in converted:
                 continue
@@ -212,7 +228,9 @@ def convert_policy_wrist_actions_to_sim(
             wrist = wrist[:, None, :]
         for env_index in range(num_envs):
             calibration = build_lever_eef_calibration(env, env_index)
-            assert calibration is not None, "Could not resolve PELVIS_LINK for lever_eef frame bridge"
+            assert (
+                calibration is not None
+            ), "Could not resolve PELVIS_LINK for lever_eef frame bridge"
             for step in range(horizon):
                 wrist[env_index, step] = calibration.dataset_pose_to_pink_ik_pose(
                     wrist[env_index, step], hand
@@ -227,9 +245,9 @@ def convert_dataset_eef_action_to_sim(
 ) -> np.ndarray:
     """Convert a batched 34-dim EEF action chunk from dataset frame to Pink IK frame."""
     action_np = np.asarray(action_np, dtype=np.float32).copy()
-    assert action_np.shape[-1] == EEF_ACTION_DIM, (
-        f"expected {EEF_ACTION_DIM}-dim EEF action, got shape {action_np.shape}"
-    )
+    assert (
+        action_np.shape[-1] == EEF_ACTION_DIM
+    ), f"expected {EEF_ACTION_DIM}-dim EEF action, got shape {action_np.shape}"
     num_envs = action_np.shape[0]
     horizon = action_np.shape[1] if action_np.ndim == 3 else 1
     if action_np.ndim == 2:
@@ -237,15 +255,17 @@ def convert_dataset_eef_action_to_sim(
 
     for env_index in range(num_envs):
         calibration = build_lever_eef_calibration(env, env_index)
-        assert calibration is not None, "Could not resolve PELVIS_LINK for lever_eef frame bridge"
+        assert (
+            calibration is not None
+        ), "Could not resolve PELVIS_LINK for lever_eef frame bridge"
         for step in range(horizon):
             left = action_np[env_index, step, LEFT_WRIST_POSE_SLICE]
             right = action_np[env_index, step, RIGHT_WRIST_POSE_SLICE]
-            action_np[env_index, step, LEFT_WRIST_POSE_SLICE] = calibration.dataset_pose_to_pink_ik_pose(
-                left, "left"
+            action_np[env_index, step, LEFT_WRIST_POSE_SLICE] = (
+                calibration.dataset_pose_to_pink_ik_pose(left, "left")
             )
-            action_np[env_index, step, RIGHT_WRIST_POSE_SLICE] = calibration.dataset_pose_to_pink_ik_pose(
-                right, "right"
+            action_np[env_index, step, RIGHT_WRIST_POSE_SLICE] = (
+                calibration.dataset_pose_to_pink_ik_pose(right, "right")
             )
     if horizon == 1 and action_np.ndim == 3:
         return action_np[:, 0, :]
@@ -269,9 +289,9 @@ def _resolve_hand_slot_permutation(robot) -> list[int] | None:
     from isaaclab_arena.embodiments.alex.alex import ABILITY_HAND_TELEOP_JOINT_ORDER
 
     _, applied_order = robot.find_joints(list(ABILITY_HAND_TELEOP_JOINT_ORDER))
-    assert sorted(applied_order) == sorted(ABILITY_HAND_TELEOP_JOINT_ORDER), (
-        f"unexpected hand joints resolved: {applied_order}"
-    )
+    assert sorted(applied_order) == sorted(
+        ABILITY_HAND_TELEOP_JOINT_ORDER
+    ), f"unexpected hand joints resolved: {applied_order}"
     teleop_index = {name: i for i, name in enumerate(ABILITY_HAND_TELEOP_JOINT_ORDER)}
     perm = [teleop_index[name] for name in applied_order]
     if perm == list(range(len(perm))):
@@ -286,9 +306,9 @@ def reorder_hand_targets_for_pink_ik(action: torch.Tensor, env) -> torch.Tensor:
     Only needed for actions built from *semantic* joint names (real-robot lever_eef
     policies); sim-teleop recorded actions already carry the applied convention.
     """
-    assert action.shape[-1] == EEF_ACTION_DIM, (
-        f"expected {EEF_ACTION_DIM}-dim EEF action, got shape {tuple(action.shape)}"
-    )
+    assert (
+        action.shape[-1] == EEF_ACTION_DIM
+    ), f"expected {EEF_ACTION_DIM}-dim EEF action, got shape {tuple(action.shape)}"
     unwrapped = getattr(env, "unwrapped", env)
     perm = _resolve_hand_slot_permutation(unwrapped.scene["robot"])
     if perm is None:
@@ -309,9 +329,9 @@ def _resolve_neck_joint_ids(robot) -> torch.Tensor:
     neck_ids_list, resolved = robot.find_joints(
         list(_LEVER_EEF_NECK_JOINT_NAMES), preserve_order=True
     )
-    assert list(resolved) == list(_LEVER_EEF_NECK_JOINT_NAMES), (
-        f"expected neck joints {_LEVER_EEF_NECK_JOINT_NAMES}, got {list(resolved)}"
-    )
+    assert list(resolved) == list(
+        _LEVER_EEF_NECK_JOINT_NAMES
+    ), f"expected neck joints {_LEVER_EEF_NECK_JOINT_NAMES}, got {list(resolved)}"
     neck_ids = torch.tensor(neck_ids_list, dtype=torch.int32, device=robot.device)
     _NECK_JOINT_IDS_CACHE[cache_key] = neck_ids
     return neck_ids

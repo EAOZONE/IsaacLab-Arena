@@ -23,6 +23,13 @@
 #   SKIP_DOWNLOAD     0     set 1 when DATASET_PATH is bind-mounted (cluster/local data)
 #   OUTPUT_DIR        /checkpoints  (mount a volume here to survive restarts; training
 #                                    auto-resumes from the last checkpoint it finds)
+#   COLOR_JITTER_BRIGHTNESS/CONTRAST/SATURATION/HUE   0.4/0.5/0.6/0.1
+#                     Photometric augmentation strength on real training frames (torchvision
+#                     ColorJitter ranges; hue is capped at 0.5). Raised from the previous
+#                     0.3/0.4/0.5/0.08 defaults -- those didn't close the sim2real gap for
+#                     lever_eef closed-loop eval (policy stayed frozen on rendered sim images
+#                     despite that jitter), so this pushes further before trying anything else.
+#   RANDOM_ROTATION_ANGLE  10   Max +/- degrees of random image rotation (was unset/0 before).
 
 set -euo pipefail
 
@@ -50,6 +57,12 @@ DATALOADER_WORKERS="${DATALOADER_WORKERS:-16}"
 LOW_VRAM="${LOW_VRAM:-0}"
 USE_LORA="${USE_LORA:-0}"
 LORA_RANK="${LORA_RANK:-64}"
+
+COLOR_JITTER_BRIGHTNESS="${COLOR_JITTER_BRIGHTNESS:-0.4}"
+COLOR_JITTER_CONTRAST="${COLOR_JITTER_CONTRAST:-0.5}"
+COLOR_JITTER_SATURATION="${COLOR_JITTER_SATURATION:-0.6}"
+COLOR_JITTER_HUE="${COLOR_JITTER_HUE:-0.1}"
+RANDOM_ROTATION_ANGLE="${RANDOM_ROTATION_ANGLE:-10}"
 
 if [[ "${LOW_VRAM}" == "1" ]]; then
   GLOBAL_BATCH_SIZE="${GLOBAL_BATCH_SIZE:-2}"
@@ -133,7 +146,12 @@ fi
   "${TUNE_FLAGS[@]}" \
   --dataloader-num-workers "${DATALOADER_WORKERS}" \
   --embodiment-tag NEW_EMBODIMENT \
-  --color-jitter-params brightness 0.3 contrast 0.4 saturation 0.5 hue 0.08
+  --color-jitter-params \
+    brightness "${COLOR_JITTER_BRIGHTNESS}" \
+    contrast "${COLOR_JITTER_CONTRAST}" \
+    saturation "${COLOR_JITTER_SATURATION}" \
+    hue "${COLOR_JITTER_HUE}" \
+  --random-rotation-angle "${RANDOM_ROTATION_ANGLE}"
 
 if [[ "${SKIP_UPLOAD}" != "1" ]]; then
   echo "=== Uploading latest checkpoint to ${HF_MODEL_REPO} ==="

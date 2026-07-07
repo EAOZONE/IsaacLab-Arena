@@ -27,6 +27,7 @@ from isaaclab_arena.policy.action_scheduling import (
     SyncedBatchActionScheduler,
 )
 from isaaclab_arena.policy.policy_base import PolicyBase
+from isaaclab_arena_gr00t.policy.dataset_video_override import LerobotDatasetVideoSource
 from isaaclab_arena_gr00t.policy.config.gr00t_closedloop_policy_config import (
     Gr00tClosedloopPolicyConfig,
     TaskMode,
@@ -69,32 +70,37 @@ class Gr00tRemoteClosedloopPolicyArgs(Gr00tBasePolicyArgs):
     and adds remote server connection parameters and num_envs.
     """
 
-    num_envs: int = field(
-        default=1, metadata={"help": "Number of environments to simulate"}
+    num_envs: int = field(default=1, metadata={"help": "Number of environments to simulate"})
+    remote_host: str = field(default="localhost", metadata={"help": "GR00T policy server hostname"})
+    remote_port: int = field(default=5555, metadata={"help": "GR00T policy server port"})
+    remote_api_token: str | None = field(default=None, metadata={"help": "API token for the policy server"})
+    stream_ikstreamer: bool = field(default=False, metadata={"help": "Mirror actions to RDX IK streamer"})
+    ikstreamer_host: str = field(default="127.0.0.1", metadata={"help": "RDX IK streamer host"})
+    ikstreamer_port: int = field(default=2102, metadata={"help": "RDX IK streamer port"})
+    debug_ikstreamer: bool = field(default=False, metadata={"help": "Print streamed poses to console"})
+    ikstreamer_yaw_offset: float = field(default=0.0, metadata={"help": "Yaw offset for streamed poses"})
+    replay_video_dataset_path: str | None = field(
+        default=None,
+        metadata={
+            "help": (
+                "LeRobot-v3 dataset root; when set, feed recorded episode frames to the"
+                " policy in place of the live sim cameras (state/actions stay live)."
+            )
+        },
     )
-    remote_host: str = field(
-        default="localhost", metadata={"help": "GR00T policy server hostname"}
+    replay_video_episode: int = field(
+        default=0, metadata={"help": "Episode index to read frames from for --replay_video_dataset_path"}
     )
-    remote_port: int = field(
-        default=5555, metadata={"help": "GR00T policy server port"}
+    replay_video_stride: int = field(
+        default=0,
+        metadata={
+            "help": (
+                "Dataset frames to advance per server query (0 = action_chunk_length, the natural closed-loop cadence)."
+            )
+        },
     )
-    remote_api_token: str | None = field(
-        default=None, metadata={"help": "API token for the policy server"}
-    )
-    stream_ikstreamer: bool = field(
-        default=False, metadata={"help": "Mirror actions to RDX IK streamer"}
-    )
-    ikstreamer_host: str = field(
-        default="127.0.0.1", metadata={"help": "RDX IK streamer host"}
-    )
-    ikstreamer_port: int = field(
-        default=2102, metadata={"help": "RDX IK streamer port"}
-    )
-    debug_ikstreamer: bool = field(
-        default=False, metadata={"help": "Print streamed poses to console"}
-    )
-    ikstreamer_yaw_offset: float = field(
-        default=0.0, metadata={"help": "Yaw offset for streamed poses"}
+    replay_video_loop: bool = field(
+        default=False, metadata={"help": "Restart the dataset episode from frame 0 when exhausted"}
     )
 
     @classmethod
@@ -112,6 +118,10 @@ class Gr00tRemoteClosedloopPolicyArgs(Gr00tBasePolicyArgs):
             ikstreamer_port=getattr(args, "ikstreamer_port", 2102),
             debug_ikstreamer=getattr(args, "debug_ikstreamer", False),
             ikstreamer_yaw_offset=getattr(args, "ikstreamer_yaw_offset", 0.0),
+            replay_video_dataset_path=getattr(args, "replay_video_dataset_path", None),
+            replay_video_episode=getattr(args, "replay_video_episode", 0),
+            replay_video_stride=getattr(args, "replay_video_stride", 0),
+            replay_video_loop=getattr(args, "replay_video_loop", False),
         )
 
 
@@ -155,9 +165,7 @@ class Gr00tRemoteClosedloopPolicy(PolicyBase):
         )
 
         # Action / chunk shapes
-        self.action_dim = compute_action_dim(
-            self.task_mode, self.robot_action_joints_config
-        )
+        self.action_dim = compute_action_dim(self.task_mode, self.robot_action_joints_config)
         self.action_chunk_length = self.policy_config.action_chunk_length
 
         self._chunking_state: ActionScheduler | None = action_scheduler_cls(
@@ -178,22 +186,34 @@ class Gr00tRemoteClosedloopPolicy(PolicyBase):
         )
         self._client: Gr00tPolicyClient | None = client
         if not client.ping():
-            raise ConnectionError(
-                f"Cannot reach GR00T policy server at {config.remote_host}:{config.remote_port}"
-            )
+            raise ConnectionError(f"Cannot reach GR00T policy server at {config.remote_host}:{config.remote_port}")
 
         self.task_description: str | None = None
 
         # Optional RDX IK streamer
-        self._ikstreamer_bridge: IKStreamerBridge | None = (
-            create_ikstreamer_bridge_from_args(config)
-        )
+        self._ikstreamer_bridge: IKStreamerBridge | None = create_ikstreamer_bridge_from_args(config)
         self._ikstreamer_dim_mismatch_warned = [False]
 
-        self._use_lever_eef_frame_bridge = uses_lever_eef_frame_bridge(
-            self.policy_config.modality_config_path
-        )
+        self._use_lever_eef_frame_bridge = uses_lever_eef_frame_bridge(self.policy_config.modality_config_path)
         self._neck_action_chunk: torch.Tensor | None = None
+
+        # Optional debug override: feed recorded dataset frames to the server instead of the
+        # live sim cameras (state/actions stay live). Isolates the visual sim-to-real gap.
+        self._video_source: LerobotDatasetVideoSource | None = None
+        if config.replay_video_dataset_path is not None:
+            stride = config.replay_video_stride or self.action_chunk_length
+            self._video_source = LerobotDatasetVideoSource(
+                dataset_root=config.replay_video_dataset_path,
+                episode_index=config.replay_video_episode,
+                stride=stride,
+                loop=config.replay_video_loop,
+            )
+            print(
+                "[Gr00tRemoteClosedloopPolicy] Dataset video override ENABLED:"
+                f" {config.replay_video_dataset_path} episode {config.replay_video_episode}"
+                f" (stride {stride} frames/query, loop={config.replay_video_loop}) ->"
+                f" sim cameras {self.policy_config.pov_cam_name_sim} are ignored for policy input."
+            )
 
         # Policy-rate action pacing: the chunk is trained at ``policy_control_hz`` (e.g. 30) but the
         # sim steps faster (e.g. 50 Hz). We set the scheduler's zero-order-hold rate on the first
@@ -246,9 +266,7 @@ class Gr00tRemoteClosedloopPolicy(PolicyBase):
             default="localhost",
             help="GR00T policy server hostname",
         )
-        group.add_argument(
-            "--remote_port", type=int, default=5555, help="GR00T policy server port"
-        )
+        group.add_argument("--remote_port", type=int, default=5555, help="GR00T policy server port")
         group.add_argument(
             "--remote_api_token",
             type=str,
@@ -256,6 +274,37 @@ class Gr00tRemoteClosedloopPolicy(PolicyBase):
             help="API token for the policy server",
         )
         add_ikstreamer_cli_args(parser)
+        group.add_argument(
+            "--replay_video_dataset_path",
+            type=str,
+            default=None,
+            help=(
+                "LeRobot-v3 dataset root (e.g. datasets/lever_eef). When set, recorded episode"
+                " frames replace the live sim camera RGB sent to the GR00T server; sim state and"
+                " actions stay live so the robot still executes the returned actions."
+            ),
+        )
+        group.add_argument(
+            "--replay_video_episode",
+            type=int,
+            default=0,
+            help="Episode index to read frames from for --replay_video_dataset_path.",
+        )
+        group.add_argument(
+            "--replay_video_stride",
+            type=int,
+            default=0,
+            help=(
+                "Dataset frames to advance per server query (0 = action_chunk_length, matching the"
+                " closed-loop server-query cadence)."
+            ),
+        )
+        group.add_argument(
+            "--replay_video_loop",
+            action="store_true",
+            default=False,
+            help="Restart the dataset episode from frame 0 when it is exhausted.",
+        )
         group.add_argument(
             "--scheduler",
             type=str,
@@ -382,20 +431,14 @@ class Gr00tRemoteClosedloopPolicy(PolicyBase):
         sim_names = list(robot.joint_names)
         live = {name: i for i, name in enumerate(sim_names)}
         missing = [n for n in self.robot_state_joints_config if n not in live]
-        assert not missing, (
-            f"state_joints_config joints missing from sim articulation: {missing}"
-        )
+        assert not missing, f"state_joints_config joints missing from sim articulation: {missing}"
         self._live_state_joints_config = live
 
     def _extract_hold_action(self, observation: dict[str, Any]) -> torch.Tensor:
         """Build the action vector that waiting envs should hold: their current sim joint positions
         copied into the action slots that share a joint name with the state config."""
-        joint_pos_sim = observation["policy"]["robot_joint_pos"].to(
-            device=self.device, dtype=torch.float
-        )
-        hold_action = torch.zeros(
-            (self.num_envs, self.action_dim), dtype=torch.float, device=self.device
-        )
+        joint_pos_sim = observation["policy"]["robot_joint_pos"].to(device=self.device, dtype=torch.float)
+        hold_action = torch.zeros((self.num_envs, self.action_dim), dtype=torch.float, device=self.device)
         state_joints_config = self._active_state_joints_config()
         for joint_name, action_idx in self.robot_action_joints_config.items():
             state_idx = state_joints_config.get(joint_name)
@@ -438,6 +481,13 @@ class Gr00tRemoteClosedloopPolicy(PolicyBase):
         rgb_list_np, joint_pos_sim_np, eef_pose_np = extract_obs_numpy_from_torch(
             nested_obs=observation, camera_names=camera_names
         )
+        # Debug override: swap the live sim camera RGB for recorded dataset frames while keeping
+        # joint/eef state (and thus the executed actions) live. Ordered by the video modality keys
+        # to match build_gr00t_policy_observations, which zips video_keys with rgb_list_np.
+        if self._video_source is not None:
+            num_envs = joint_pos_sim_np.shape[0]
+            video_keys = self.modality_configs["video"].modality_keys
+            rgb_list_np = self._video_source.read(video_keys, num_envs=num_envs)
         if self._use_lever_eef_frame_bridge and env is not None and eef_pose_np:
             eef_pose_np = convert_sim_eef_state_to_dataset(eef_pose_np, env)
         policy_observations = build_gr00t_policy_observations(
@@ -459,14 +509,10 @@ class Gr00tRemoteClosedloopPolicy(PolicyBase):
         robot_action_policy, _ = self._client.get_action(policy_observations)
 
         if self._use_lever_eef_frame_bridge and env is not None:
-            robot_action_policy = convert_policy_wrist_actions_to_sim(
-                robot_action_policy, env
-            )
+            robot_action_policy = convert_policy_wrist_actions_to_sim(robot_action_policy, env)
 
         if "neck" in robot_action_policy:
-            self._neck_action_chunk = to_tensor(
-                robot_action_policy["neck"], device=self.device
-            )
+            self._neck_action_chunk = to_tensor(robot_action_policy["neck"], device=self.device)
         else:
             self._neck_action_chunk = None
 
@@ -485,10 +531,7 @@ class Gr00tRemoteClosedloopPolicy(PolicyBase):
             # Pink IK action term actually applies its hand block in.
             action_tensor = reorder_hand_targets_for_pink_ik(action_tensor, env)
 
-        assert (
-            action_tensor.shape[0] == self.num_envs
-            and action_tensor.shape[1] >= self.action_chunk_length
-        )
+        assert action_tensor.shape[0] == self.num_envs and action_tensor.shape[1] >= self.action_chunk_length
         return action_tensor
 
     # lever_eef dataset (H2Ozone/lever_eef) per-group STATE means, for OOD comparison.
@@ -517,7 +560,9 @@ class Gr00tRemoteClosedloopPolicy(PolicyBase):
             if ref is not None and len(ref) == len(values):
                 ref_arr = np.asarray(ref)
                 line += f"\n    {'dataset_mean':>12} = {ref_arr}"
-                line += f"\n    {'abs_diff':>12} = {np.abs(values - ref_arr)}  (max {np.abs(values - ref_arr).max():.4f})"
+                line += (
+                    f"\n    {'abs_diff':>12} = {np.abs(values - ref_arr)}  (max {np.abs(values - ref_arr).max():.4f})"
+                )
             _p(line)
 
         if not self._debug_joint_order_dumped and env is not None:
@@ -525,9 +570,7 @@ class Gr00tRemoteClosedloopPolicy(PolicyBase):
             try:
                 robot = getattr(env, "unwrapped", env).scene["robot"]
                 sim_names = list(robot.joint_names)
-                cfg_names = sorted(
-                    self.robot_state_joints_config, key=self.robot_state_joints_config.get
-                )
+                cfg_names = sorted(self.robot_state_joints_config, key=self.robot_state_joints_config.get)
                 _p("\n========== [GR00T_DEBUG_STATE] sim joint order vs state config ==========")
                 _p(f"sim robot.joint_names ({len(sim_names)}):\n{sim_names}")
                 mismatches = [
@@ -536,14 +579,11 @@ class Gr00tRemoteClosedloopPolicy(PolicyBase):
                     if cfg_names[i] != sim_names[i]
                 ]
                 if len(sim_names) != len(cfg_names):
-                    _p(
-                        f"LENGTH MISMATCH: sim has {len(sim_names)} joints, "
-                        f"state config has {len(cfg_names)}."
-                    )
+                    _p(f"LENGTH MISMATCH: sim has {len(sim_names)} joints, state config has {len(cfg_names)}.")
                 if mismatches:
                     _p(
                         f"ORDER MISMATCH at {len(mismatches)} positions "
-                        f"(idx: config_name != sim_name) -> state is SCRAMBLED:"
+                        "(idx: config_name != sim_name) -> state is SCRAMBLED:"
                     )
                     for i, cfg_n, sim_n in mismatches:
                         _p(f"    [{i:2d}] config={cfg_n} != sim={sim_n}")
@@ -561,12 +601,19 @@ class Gr00tRemoteClosedloopPolicy(PolicyBase):
         self._client.reset()
         self._chunking_state.reset(env_ids)
         self._neck_action_chunk = None
+        # Replay the recorded episode from frame 0 for each new sim episode.
+        if self._video_source is not None:
+            self._video_source.reset()
 
     def close(self) -> None:
         """Release Arena-side resources for the remote GR00T policy client."""
         if self._ikstreamer_bridge is not None:
             self._ikstreamer_bridge.close()
             self._ikstreamer_bridge = None
+
+        if self._video_source is not None:
+            self._video_source.close()
+            self._video_source = None
 
         client = self._client
         try:
