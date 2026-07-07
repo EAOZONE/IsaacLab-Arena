@@ -21,7 +21,10 @@ Wire protocol (server side of what ``us.ihmc.openpi.OpenpiClient`` /
   ``{"__ndarray__": True, "data": <bytes>, "dtype": <str>, "shape": [...]}``.
 * Respond with one binary frame: msgpack map ``{"actions": <ndarray-wrapped float64 array of
   shape [chunk_length, STATE_SIZE]>, "policy_timing": {"infer_ms": float},
-  "server_timing": {"infer_ms": float}}``.
+  "server_timing": {"infer_ms": float}, "horizon": int}``. ``horizon`` is the number of leading
+  steps in ``actions`` that are genuine model predictions - the rest (up to ``chunk_length``) are
+  the last real step held/repeated to fill the fixed-size buffer (see ``infer()``), and the Java
+  client is expected to only replay the first ``horizon`` steps before requesting again.
 * On error, send a **text** frame (the Java handler treats text frames as server-side errors,
   binary frames as normal responses).
 
@@ -193,7 +196,13 @@ class Gr00tOpenpiBridgeServer:
                 actions[step, start:end] = np.asarray(action_dict[action_key])[0, t, :]
 
         server_ms = (time.perf_counter() - server_start) * 1000.0
-        return {"actions": actions, "policy_timing_ms": policy_ms, "server_timing_ms": server_ms}
+        # Reported so the Java client can replay only the genuine predicted steps instead of the
+        # held/repeated tail above: without this, Gr00tUpdateThread played all ACTION_CHUNK_LENGTH
+        # (50) steps before re-inferring, so the robot got ~horizon real steps of motion followed by
+        # a long freeze at the last real step (repeated, indistinguishable from real dispatch) before
+        # snapping into the next freshly-inferred chunk - a periodic freeze/relatch cycle.
+        reported_horizon = min(horizon, ACTION_CHUNK_LENGTH)
+        return {"actions": actions, "policy_timing_ms": policy_ms, "server_timing_ms": server_ms, "horizon": reported_horizon}
 
     async def handle_connection(self, websocket: WebSocketServerProtocol) -> None:
         await websocket.send(msgpack.packb({"status": "ready"}))
@@ -213,6 +222,7 @@ class Gr00tOpenpiBridgeServer:
                     "actions": ndarray_to_wire(result["actions"]),
                     "policy_timing": {"infer_ms": float(result["policy_timing_ms"])},
                     "server_timing": {"infer_ms": float(result["server_timing_ms"])},
+                    "horizon": int(result["horizon"]),
                 }
                 await websocket.send(msgpack.packb(response, use_bin_type=True))
             except Exception as exception:  # noqa: BLE001 - report all failures to the client
