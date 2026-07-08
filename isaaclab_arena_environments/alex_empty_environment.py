@@ -19,7 +19,7 @@ View Alex holding still at a given pose (inside the container)::
 Optionally place a USD asset at a trial pose alongside the robot::
 
     ... alex_empty \\
-        --usd isaaclab_arena/assets/lever_sim/Lever.usd \\
+        --usd isaaclab_arena/assets/lever_sim/Lever_revolute.usd \\
         --usd_pos 0.6,0.0,0.9 --usd_yaw 90
 
 The env also works with the usual runners (teleop.py, record_demos.py, the
@@ -43,7 +43,13 @@ if TYPE_CHECKING:
 # Default Alex spawn matches alex_teleop_sandbox (lever_eef calibration reference frame).
 _DEFAULT_SPAWN_POS = (-0.4, -0.48682, 0.94296)
 
-# Tuned lever-board pose when --usd points at Lever.usd (see Pictures/Screenshots 2026-07-04).
+# Tuned lever-board pose when --usd points at one of the lever_sim board USDs (see
+# Pictures/Screenshots 2026-07-04). Lever_revolute.usd (2026-07-07) shares the same
+# Layout_v9 origin and inches units (mpu=0.0254) as Lever.usd, just with its physics
+# authored as a single dynamic rigid body (the handle) jointed straight to the static
+# base instead of the fragile ArticulationRootAPI + dummy-link workaround in
+# Lever_physics.usd, so the same tuned pose/scale applies.
+_LEVER_USD_STEMS = ("lever", "lever_revolute")
 _LEVER_USD_DEFAULT_POS = (-0.05062, -0.51385, 0.75167)
 _LEVER_USD_DEFAULT_YAW = 90.0
 _LEVER_USD_DEFAULT_SCALE = 0.0254
@@ -142,7 +148,7 @@ class AlexEmptyEnvironment(ExampleEnvironmentBase):
                 len(args_cli.usd_pos) == 3
             ), f"--usd_pos needs 3 comma-separated values, got {args_cli.usd_pos}"
             usd_stem = Path(args_cli.usd).stem.lower()
-            if usd_stem == "lever" and tuple(args_cli.usd_pos) == (0.6, 0.0, 0.9):
+            if usd_stem in _LEVER_USD_STEMS and tuple(args_cli.usd_pos) == (0.6, 0.0, 0.9):
                 # Generic default; use the tuned board pose unless the caller overrides it.
                 usd_pos = _LEVER_USD_DEFAULT_POS
                 usd_yaw = (
@@ -171,7 +177,7 @@ class AlexEmptyEnvironment(ExampleEnvironmentBase):
                     scale=(usd_scale, usd_scale, usd_scale),
                 )
             )
-            if usd_stem == "lever" and args_cli.table != "none":
+            if usd_stem in _LEVER_USD_STEMS and args_cli.table != "none":
                 from isaaclab.utils.assets import ISAAC_NUCLEUS_DIR
 
                 scene_assets.append(
@@ -252,8 +258,9 @@ class AlexEmptyEnvironment(ExampleEnvironmentBase):
             type=str,
             default="seattle_lab",
             help=(
-                "Workbench placed under a Lever.usd --usd asset, so it sits on a table instead"
-                " of floating over the bare ground plane (visual sim2real). Pass 'none' to disable."
+                "Workbench placed under a lever_sim board --usd asset (Lever.usd / Lever_revolute.usd),"
+                " so it sits on a table instead of floating over the bare ground plane (visual"
+                " sim2real). Pass 'none' to disable."
             ),
         )
         parser.add_argument(

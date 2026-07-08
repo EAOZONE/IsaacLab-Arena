@@ -1191,6 +1191,27 @@ def clamp_ability_hand_close_fraction(action: torch.Tensor, fraction: float) -> 
     return action
 
 
+_ABILITY_HAND_IS_LEFT_JOINT = torch.tensor(
+    [name.startswith("left_") for name in ABILITY_HAND_TELEOP_JOINT_ORDER]
+)
+
+
+def build_ability_hand_joint_action(
+    left_close_fraction: float = 0.0,
+    right_close_fraction: float = 0.0,
+    device: torch.device | str = "cpu",
+) -> torch.Tensor:
+    """Build a (20,) ability-hand joint target in ``ABILITY_HAND_TELEOP_JOINT_ORDER``.
+
+    Each side is set ``fraction`` of the way from fully open (0.0, the joint's
+    lower limit) to fully closed (1.0, the upper limit) — for scripted grasps
+    that need an explicit open/close target rather than a teleoperated one.
+    """
+    caps_left = _ability_hand_close_caps(left_close_fraction)
+    caps_right = _ability_hand_close_caps(right_close_fraction)
+    return torch.where(_ABILITY_HAND_IS_LEFT_JOINT, caps_left, caps_right).to(device=device)
+
+
 _ALEX_XR_CFG = XrCfg(
     anchor_pos=(0.0, 0.0, -1.0),
     anchor_rot=(0.0, 0.0, -0.70711, 0.70711),
