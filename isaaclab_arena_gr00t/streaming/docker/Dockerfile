@@ -38,6 +38,7 @@ RUN uv sync --python 3.10 && uv pip install -e . && uv pip install websockets
 ENV UV_NO_SYNC=1
 
 COPY isaaclab_arena_gr00t/streaming/gr00t_openpi_bridge_server.py /workspace/gr00t_openpi_bridge_server.py
+COPY isaaclab_arena_gr00t/streaming/accelerated_gr00t_server.py /workspace/accelerated_gr00t_server.py
 COPY isaaclab_arena_gr00t/streaming/docker/entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 

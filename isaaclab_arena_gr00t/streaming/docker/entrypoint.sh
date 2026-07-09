@@ -4,7 +4,9 @@
 # script just does `docker run` against this image.
 #
 # Required env: GR00T_HF_REPO, GR00T_CHECKPOINT_STEP.
-# Optional env: GR00T_MODEL_PORT (5555), GR00T_BRIDGE_PORT (8000), GR00T_TASK_DESCRIPTION ("").
+# Optional env: GR00T_MODEL_PORT (5555), GR00T_BRIDGE_PORT (8000), GR00T_TASK_DESCRIPTION (""),
+# GR00T_ENABLE_TORCH_COMPILE (true), GR00T_TORCH_COMPILE_MODE (max-autotune), and
+# GR00T_DENOISING_STEPS (the checkpoint default unless explicitly overridden).
 set -euo pipefail
 
 HF_REPO="${GR00T_HF_REPO:?}"
@@ -20,7 +22,9 @@ cd /workspace/Isaac-GR00T
 MODEL_PATH="$(uv run hf download "$HF_REPO")/checkpoint-$CHECKPOINT_STEP"
 echo "Resolved checkpoint: $MODEL_PATH"
 
-uv run python gr00t/eval/run_gr00t_server.py \
+# torch.compile is enabled by the accelerated launcher by default. Its first inference performs
+# a one-time compilation; subsequent fixed-shape robot requests use the compiled DiT action head.
+uv run python /workspace/accelerated_gr00t_server.py \
   --model-path "$MODEL_PATH" --embodiment-tag NEW_EMBODIMENT \
   --device cuda --host 127.0.0.1 --port "$MODEL_PORT" &
 MODEL_PID=$!
