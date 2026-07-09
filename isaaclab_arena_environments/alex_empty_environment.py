@@ -20,7 +20,7 @@ Optionally place a USD asset at a trial pose alongside the robot::
 
     ... alex_empty \\
         --usd isaaclab_arena/assets/lever_sim/Lever_revolute.usd \\
-        --usd_pos 0.6,0.0,0.9 --usd_yaw 90
+        --usd_pos 0.6,0.0,0.9 --usd_yaw 180
 
 The env also works with the usual runners (teleop.py, record_demos.py, the
 GR00T playback script) — pass the same ``--spawn_pos`` / ``--spawn_yaw`` args.
@@ -42,25 +42,6 @@ if TYPE_CHECKING:
 
 # Default Alex spawn matches alex_teleop_sandbox (lever_eef calibration reference frame).
 _DEFAULT_SPAWN_POS = (-0.4, -0.48682, 0.94296)
-
-# Tuned lever-board pose when --usd points at one of the lever_sim board USDs (see
-# Pictures/Screenshots 2026-07-04). Lever_revolute.usd (2026-07-07) shares the same
-# Layout_v9 origin and inches units (mpu=0.0254) as Lever.usd, just with its physics
-# authored as a single dynamic rigid body (the handle) jointed straight to the static
-# base instead of the fragile ArticulationRootAPI + dummy-link workaround in
-# Lever_physics.usd, so the same tuned pose/scale applies.
-_LEVER_USD_STEMS = ("lever", "lever_revolute")
-_LEVER_USD_DEFAULT_POS = (-0.05062, -0.51385, 0.75167)
-_LEVER_USD_DEFAULT_YAW = 90.0
-_LEVER_USD_DEFAULT_SCALE = 0.0254
-
-# Workbench placed under the lever board (visual sim2real: the real lever_eef dataset was
-# recorded with the fixture bolted to a wooden bench, not floating over a bare grid floor).
-# SeattleLabTable's own prim origin sits ~(0.37, 0.16) away from its mesh center in its local
-# xy (measured via UsdGeom.BBoxCache), so it's placed at the lever xy minus that offset to
-# actually center the tabletop under the lever. z is tuned so its surface meets the lever base.
-_LEVER_TABLE_XY_OFFSET = (0.37025, 0.15521)
-_LEVER_TABLE_POS_Z = 0.0
 
 _VALID_ALEX_EMBODIMENTS = (
     "alex_pink",
@@ -113,9 +94,7 @@ class AlexEmptyEnvironment(ExampleEnvironmentBase):
         assert (
             args_cli.embodiment in _VALID_ALEX_EMBODIMENTS
         ), f"Invalid Alex embodiment {args_cli.embodiment}; choose one of {_VALID_ALEX_EMBODIMENTS}"
-        assert (
-            len(args_cli.spawn_pos) == 3
-        ), f"--spawn_pos needs 3 comma-separated values, got {args_cli.spawn_pos}"
+        assert len(args_cli.spawn_pos) == 3, f"--spawn_pos needs 3 comma-separated values, got {args_cli.spawn_pos}"
 
         background = self.asset_registry.get_asset_by_name(args_cli.background)()
 
@@ -136,6 +115,13 @@ class AlexEmptyEnvironment(ExampleEnvironmentBase):
             )
             light.add_hdr(hdr_registry.get_hdr_by_name(args_cli.hdr)())
 
+            if args_cli.lever_dr:
+                from isaaclab_arena.variations.light_property_variation import LightPropertyVariation
+
+                light.get_variation("hdr_image").enable()
+                light.add_variation(LightPropertyVariation(light))
+                light.get_variation("light_intensity").enable()
+
         scene_assets = [background]
         if light is not None:
             scene_assets.append(light)
@@ -143,61 +129,44 @@ class AlexEmptyEnvironment(ExampleEnvironmentBase):
             from pathlib import Path
 
             from isaaclab_arena.assets.object import Object
+            from isaaclab_arena_environments import lever_scene_builder
 
-            assert (
-                len(args_cli.usd_pos) == 3
-            ), f"--usd_pos needs 3 comma-separated values, got {args_cli.usd_pos}"
+            assert len(args_cli.usd_pos) == 3, f"--usd_pos needs 3 comma-separated values, got {args_cli.usd_pos}"
             usd_stem = Path(args_cli.usd).stem.lower()
-            if usd_stem in _LEVER_USD_STEMS and tuple(args_cli.usd_pos) == (0.6, 0.0, 0.9):
+            if usd_stem in lever_scene_builder.LEVER_USD_STEMS and tuple(args_cli.usd_pos) == (0.6, 0.0, 0.9):
                 # Generic default; use the tuned board pose unless the caller overrides it.
-                usd_pos = _LEVER_USD_DEFAULT_POS
-                usd_yaw = (
-                    _LEVER_USD_DEFAULT_YAW
-                    if args_cli.usd_yaw == 0.0
-                    else args_cli.usd_yaw
-                )
+                usd_pos = lever_scene_builder.LEVER_USD_DEFAULT_POS
+                usd_yaw = lever_scene_builder.LEVER_USD_DEFAULT_YAW if args_cli.usd_yaw == 0.0 else args_cli.usd_yaw
                 usd_scale = (
-                    _LEVER_USD_DEFAULT_SCALE
-                    if args_cli.usd_scale == 1.0
-                    else args_cli.usd_scale
+                    lever_scene_builder.LEVER_USD_DEFAULT_SCALE if args_cli.usd_scale == 1.0 else args_cli.usd_scale
                 )
             else:
                 usd_pos = tuple(args_cli.usd_pos)
                 usd_yaw = args_cli.usd_yaw
                 usd_scale = args_cli.usd_scale
-            usd_half_yaw = math.radians(usd_yaw) / 2.0
-            scene_assets.append(
-                Object(
-                    name=usd_stem.replace("(", "_").replace(")", "_"),
-                    usd_path=args_cli.usd,
-                    initial_pose=Pose(
-                        position_xyz=usd_pos,
-                        rotation_xyzw=(0.0, 0.70711, 0.70711, 0.0),
-                    ),
-                    scale=(usd_scale, usd_scale, usd_scale),
-                )
-            )
-            if usd_stem in _LEVER_USD_STEMS and args_cli.table != "none":
-                from isaaclab.utils.assets import ISAAC_NUCLEUS_DIR
 
+            if usd_stem in lever_scene_builder.LEVER_USD_STEMS:
+                lever_assets, _lever_object = lever_scene_builder.build_lever_scene_assets(
+                    usd_path=args_cli.usd,
+                    usd_pos=usd_pos,
+                    usd_yaw=usd_yaw,
+                    usd_scale=usd_scale,
+                    lever_dr=args_cli.lever_dr,
+                    table=args_cli.table,
+                )
+                scene_assets.extend(lever_assets)
+            else:
+                usd_initial_pose = Pose(position_xyz=usd_pos, rotation_xyzw=(0.0, 0.70711, 0.70711, 0.0))
                 scene_assets.append(
                     Object(
-                        name="lever_table",
-                        usd_path=f"{ISAAC_NUCLEUS_DIR}/Props/Mounts/SeattleLabTable/table_instanceable.usd",
-                        initial_pose=Pose(
-                            position_xyz=(
-                                usd_pos[0] - _LEVER_TABLE_XY_OFFSET[0],
-                                usd_pos[1] - _LEVER_TABLE_XY_OFFSET[1],
-                                _LEVER_TABLE_POS_Z,
-                            ),
-                            rotation_xyzw=(0.0, 0.0, 0.0, 1.0),
-                        ),
+                        name=usd_stem.replace("(", "_").replace(")", "_"),
+                        usd_path=args_cli.usd,
+                        initial_pose=usd_initial_pose,
+                        scale=(usd_scale, usd_scale, usd_scale),
                     )
                 )
 
-        embodiment = self.asset_registry.get_asset_by_name(args_cli.embodiment)(
-            enable_cameras=args_cli.enable_cameras
-        )
+        embodiment = self.asset_registry.get_asset_by_name(args_cli.embodiment)(enable_cameras=args_cli.enable_cameras)
         half_yaw = math.radians(args_cli.spawn_yaw) / 2.0
         embodiment.set_initial_pose(
             Pose(
@@ -208,9 +177,7 @@ class AlexEmptyEnvironment(ExampleEnvironmentBase):
 
         teleop_device = None
         if args_cli.teleop_device is not None:
-            teleop_device = self.device_registry.get_device_by_name(
-                args_cli.teleop_device
-            )()
+            teleop_device = self.device_registry.get_device_by_name(args_cli.teleop_device)()
 
         return IsaacLabArenaEnvironment(
             name=self.name,
@@ -222,9 +189,7 @@ class AlexEmptyEnvironment(ExampleEnvironmentBase):
 
     @staticmethod
     def add_cli_args(parser: argparse.ArgumentParser) -> None:
-        parser.add_argument(
-            "--teleop_device", type=str, default=None, help="e.g. captury or openxr"
-        )
+        parser.add_argument("--teleop_device", type=str, default=None, help="e.g. captury or openxr")
         parser.add_argument("--embodiment", type=str, default="alex_v2_ability_hands")
         parser.add_argument(
             "--spawn_pos",
@@ -251,6 +216,15 @@ class AlexEmptyEnvironment(ExampleEnvironmentBase):
             help=(
                 "HDR environment map for a dome light (ground_plane ships with no lights, so"
                 " cameras otherwise render near-black). Pass 'none' to disable."
+            ),
+        )
+        parser.add_argument(
+            "--lever_dr",
+            action="store_true",
+            help=(
+                "Enable domain randomization for the lever setup: reset-time xy/yaw pose jitter,"
+                " a curated handle-color palette, and HDR-skybox + per-reset light-intensity"
+                " variation. Off by default (identical fixed pose/color/lighting to today)."
             ),
         )
         parser.add_argument(

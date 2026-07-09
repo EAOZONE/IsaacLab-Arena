@@ -20,13 +20,10 @@ if TYPE_CHECKING:
 
 
 def ensure_environments_registered():
-    """Trigger registration of all environments in the ``isaaclab_arena_environments`` package.
+    """Trigger registration of all environments in the ``isaaclab_arena_environments`` package."""
+    from isaaclab_arena_environments import ensure_environments_registered as _register
 
-    Importing the package fires the ``@register_environment`` decorator on each
-    environment module, which handles registration.  The import is cached by
-    Python, so subsequent calls are free.
-    """
-    import isaaclab_arena_environments  # noqa: F401
+    _register()
 
 
 def parse_and_return_external_environment_from_string(

@@ -34,3 +34,13 @@ def object_position_in_frame(
         wp.to_torch(root_frame.data.root_pos_w), wp.to_torch(root_frame.data.root_quat_w), object_pos_w
     )
     return object_pos_b
+
+
+def object_angular_velocity_norm(
+    env: ManagerBasedRLEnv,
+    object_cfg: SceneEntityCfg = SceneEntityCfg("object"),
+) -> torch.Tensor:
+    """L2 norm of a rigid object's root angular velocity in the world frame (rad/s)."""
+    object: RigidObject = env.scene[object_cfg.name]
+    ang_vel_w = wp.to_torch(object.data.root_ang_vel_w)
+    return torch.norm(ang_vel_w, dim=1, keepdim=True)

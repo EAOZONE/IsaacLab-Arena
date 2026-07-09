@@ -3,13 +3,29 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
+"""Example environments for Isaac Lab-Arena.
+
+Environment modules are registered lazily via :func:`isaaclab_arena_environments.cli.ensure_environments_registered`
+so importing this package (or ``cli``) does not pull every environment module — and anything that
+transitively imports ``pxr`` — before ``SimulationApp`` starts.
+"""
+
+from __future__ import annotations
+
 import importlib
 import pkgutil
 
-import isaaclab_arena_environments
+_NON_ENVIRONMENT_MODULES = {"cli", "example_environment_base", "lever_scene_builder"}
 
-_NON_ENVIRONMENT_MODULES = {"cli", "example_environment_base"}
+_environments_registered = False
 
-for _importer, _modname, _ispkg in pkgutil.iter_modules(isaaclab_arena_environments.__path__):
-    if not _ispkg and _modname not in _NON_ENVIRONMENT_MODULES:
-        importlib.import_module(f"isaaclab_arena_environments.{_modname}")
+
+def ensure_environments_registered() -> None:
+    """Import every ``@register_environment`` module once to populate the registry."""
+    global _environments_registered
+    if _environments_registered:
+        return
+    for _importer, _modname, _ispkg in pkgutil.iter_modules(__path__):
+        if not _ispkg and _modname not in _NON_ENVIRONMENT_MODULES:
+            importlib.import_module(f"{__name__}.{_modname}")
+    _environments_registered = True

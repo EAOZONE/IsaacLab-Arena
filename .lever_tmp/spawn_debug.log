@@ -1,0 +1,22 @@
+defaults pos=(-0.05062, -0.51385, 0.75167) yaw=180.0 scale=0.0254
+
+=== targetPosition=65.0 ===
+sim handle local +X -> world (+1.00,+0.00,-0.10)
+sim handle local +Y -> world (+0.00,-1.00,+0.00)
+sim handle local +Z -> world (-0.10,-0.00,-1.00)
+sim base->handle offset (+0.00,-0.57,+0.82)
+
+=== targetPosition=0.0 ===
+sim handle local +X -> world (+1.00,+0.00,-0.10)
+sim handle local +Y -> world (+0.00,-1.00,+0.00)
+sim handle local +Z -> world (-0.10,-0.00,-1.00)
+sim base->handle offset (+0.00,-0.57,+0.82)
+
+=== targetPosition=-65.0 ===
+sim handle local +X -> world (+1.00,+0.00,-0.10)
+sim handle local +Y -> world (+0.00,-1.00,+0.00)
+sim handle local +Z -> world (-0.10,-0.00,-1.00)
+sim base->handle offset (+0.00,-0.57,+0.82)
+
+=== native USD q=0 (Y-up file) ===
+base->handle offset (+0.00,+0.57,+0.82)

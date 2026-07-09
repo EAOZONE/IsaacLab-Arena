@@ -5,72 +5,67 @@
 
 import argparse
 
-from isaaclab_arena.assets.registries import EnvironmentRegistry
-from isaaclab_arena_environments.cli import ensure_environments_registered
 
+def _kit_is_running() -> bool:
+    """Return True when Omniverse Kit is already up (``AppLauncher`` was started)."""
+    import sys
 
-def is_simulation_app_running() -> bool:
-    """Checks if the simulation app is running."""
-    import omni.kit.app
-
+    mod = sys.modules.get("omni.kit.app")
+    if mod is None:
+        return False
     try:
-        app = omni.kit.app.get_app()
+        app = mod.get_app()
         return app is not None and app.is_running()
     except Exception:
         return False
 
 
 def environment_registration_callback() -> list[str]:
-    """This function is for use with Isaac Lab scripts to register an IsaacLab Arena environment.
+    """Register an Isaac Lab-Arena environment for Isaac Lab's RSL-RL ``train.py`` script.
 
-    This function is passed to an Isaac Lab script as an external callback function. Example:
+    Passed via ``--external_callback``. ``train.py`` imports Isaac Lab modules before
+    invoking this callback, so we must start ``SimulationApp`` here — **before** importing
+    or building any Arena scene/embodiment code that touches ``pxr`` — then register the
+    gym task. ``train.py``'s ``launch_simulation()`` sees Kit is already running and skips
+    a second ``AppLauncher`` startup.
 
-    python IsaacLab/scripts/reinforcement_learning/rsl_rl/train.py
-        --external_callback isaaclab_arena.environments.isaaclab_interop.environment_registration_callback
-        --task lift_object
-        --num_envs 512
-        --object cracker_box
-        agent.policy.activation=relu
+    Example::
 
-    In this case the "lift_object" environment is registered with Isaac Lab before
-    running the RSL RL training script. The training script will then run the
-    training for the lift_object environment. In the example above we
-    also use an environment flag to set the object to be a cracker box and
-    Hydra to set the policy activation to be ReLU.
-
+        python submodules/IsaacLab/scripts/reinforcement_learning/rsl_rl/train.py \\
+            --external_callback isaaclab_arena.environments.isaaclab_interop.environment_registration_callback \\
+            --task alex_lever_turn --num_envs 64 --max_iterations 4000
     """
     from isaaclab.app import AppLauncher
 
-    # Start the simulation app if it is not running.
-    if not is_simulation_app_running():
-        parser = argparse.ArgumentParser()
-        AppLauncher.add_app_launcher_args(parser)
-        args, _ = parser.parse_known_args()
-        AppLauncher(args)
+    # Phase 1: parse only launcher flags and start SimulationApp before any pxr imports.
+    launcher_parser = argparse.ArgumentParser()
+    launcher_parser.add_argument(
+        "--task", type=str, required=True, help="Name of the IsaacLab Arena environment to register."
+    )
+    AppLauncher.add_app_launcher_args(launcher_parser)
+    launcher_args, _ = launcher_parser.parse_known_args()
+    if not _kit_is_running():
+        AppLauncher(launcher_args)
 
-    # Imports after the simulation app is started.
+    # Phase 2: safe to import Arena now that Kit is up.
+    from isaaclab_arena.assets.registries import EnvironmentRegistry
     from isaaclab_arena.cli.isaaclab_arena_cli import add_isaac_lab_cli_args, add_isaaclab_arena_cli_args
     from isaaclab_arena.environments.arena_env_builder import ArenaEnvBuilder
+    from isaaclab_arena_environments.cli import ensure_environments_registered
 
-    # Get the requested environment from the CLI.
     parser = argparse.ArgumentParser()
-    # NOTE(alexmillane, 2026.02.12): With the Isaac Lab interop, we use the task name to
-    # determine the environment to register. The environment is also registered under this name.
-    # The result is that a single argument tells Arena what to register, and Lab what to run.
     parser.add_argument("--task", type=str, required=True, help="Name of the IsaacLab Arena environment to register.")
-    environment_name = parser.parse_known_args()[0].task
-    ensure_environments_registered()
-    environment = EnvironmentRegistry().get_component_by_name(environment_name)()
-    # Get the full list of environment-specific CLI args.
     AppLauncher.add_app_launcher_args(parser)
     add_isaac_lab_cli_args(parser)
     add_isaaclab_arena_cli_args(parser)
+
+    args, _ = parser.parse_known_args()
+    ensure_environments_registered()
+    environment = EnvironmentRegistry().get_component_by_name(args.task)()
     environment.add_cli_args(parser)
     args, remaining_args = parser.parse_known_args()
-    # Create the environment config
+
     isaaclab_arena_environment = environment.get_env(args)
-    # Build and register the environment
     env_builder = ArenaEnvBuilder(isaaclab_arena_environment, args)
     env_builder.build_registered()
-    # Return the arguments that were not consumed by this callback
     return remaining_args

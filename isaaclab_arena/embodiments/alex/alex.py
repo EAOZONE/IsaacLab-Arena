@@ -41,6 +41,7 @@ from isaaclab_arena.assets.register import register_asset
 from isaaclab_arena.embodiments.common.arm_mode import ArmMode
 from isaaclab_arena.embodiments.common.mimic_utils import get_rigid_and_articulated_object_poses
 from isaaclab_arena.embodiments.common.pink_ik_failure_tracking import IKFailureTrackingPinkInverseKinematicsAction
+from isaaclab_arena.embodiments.common.rl_pink_ik_action import RLPinkIKActionCfg
 from isaaclab_arena.embodiments.embodiment_base import EmbodimentBase
 from isaaclab_arena.terms.events import reset_all_articulation_joints
 from isaaclab_arena.utils.pose import Pose
@@ -807,6 +808,25 @@ def _configure_teleop_fixed_base(robot_cfg: ArticulationCfg) -> None:
     robot_cfg.spawn.fix_base = True
 
 
+def _configure_fixed_base_torso_actuator(robot_cfg: ArticulationCfg) -> None:
+    """Stiffen ``SPINE_Z`` so the arm doesn't sag under gravity when the pelvis is fixed.
+
+    ``PinkInverseKinematicsAction._apply_gravity_compensation`` zeroes gravity compensation
+    whenever the articulation is fixed-base, so the full arm weight must be held by PD stiffness
+    alone. The base template's ``"torso"`` actuator group (``SPINE_Z``/``NECK_Z``/``NECK_Y``)
+    keeps a stiffness/damping (~53.6/~8.0) tuned for a free-standing robot -- ~112x softer than
+    the teleop arm gains below -- and neither ``_configure_teleop_arm_actuators`` nor
+    ``_configure_policy_arm_actuators`` touches it, since they only override the ``"arms"``
+    group. The whole arm hangs off this comparatively very soft joint, which is why sag was
+    observed regardless of the arm actuators' own stiffness. ``SPINE_Z`` is not one of
+    ``ARM_WRIST_JOINT_NAMES_LIST`` (the Pink-IK-controlled joints), so it never receives new IK
+    targets -- stiffening it only helps it hold still, with no risk of the "random IK targets
+    cause joint-velocity spikes" issue that motivated soft *arm* actuators for RL.
+    """
+    robot_cfg.actuators["torso"].stiffness["SPINE_Z"] = ALEX_TELEOP_ARM_STIFFNESS
+    robot_cfg.actuators["torso"].damping["SPINE_Z"] = ALEX_TELEOP_ARM_DAMPING
+
+
 # Teleop arm-tracking PD gains (teleop only; policy/training use
 # ``_configure_teleop_arm_actuators`` is bypassed in favor of
 # ``_configure_policy_arm_actuators``). The IK already commands the full wrist
@@ -871,7 +891,8 @@ def _configure_hand_actuators(robot_cfg: ArticulationCfg) -> None:
 def _configure_ability_hand_robot(
     robot_version: str,
     *,
-    teleop: bool,
+    fix_base: bool = False,
+    use_teleop_actuators: bool = True,
 ) -> tuple[ArticulationCfg, str, str]:
     """Build robot cfg and resolved/pink-ik URDF paths for ability-hand embodiments."""
     paths = _alex_arena_urdf_paths(robot_version)
@@ -884,8 +905,10 @@ def _configure_ability_hand_robot(
     robot_cfg.spawn.asset_path = resolved_urdf
     robot_cfg.soft_joint_pos_limit_factor = 1.0
 
-    if teleop:
+    if fix_base:
         _configure_teleop_fixed_base(robot_cfg)
+        _configure_fixed_base_torso_actuator(robot_cfg)
+    if use_teleop_actuators:
         _configure_teleop_arm_actuators(robot_cfg, include_wrists=True)
     else:
         _configure_policy_arm_actuators(robot_cfg)
@@ -1755,6 +1778,39 @@ class AlexAbilityHandObservationsCfg:
     policy: PolicyCfg = PolicyCfg()
 
 
+@configclass
+class AlexAbilityHandRLObservationsCfg:
+    """Flat-vector observation spec for Alex Ability Hands RL (RSL-RL).
+
+    Same privileged state as :class:`AlexAbilityHandObservationsCfg`, minus
+    ``robot_links_state`` — that term is shape ``(num_links, 13)`` and cannot be
+    concatenated with the other 1-D policy terms when ``concatenate_terms=True``.
+    """
+
+    @configclass
+    class PolicyCfg(ObsGroup):
+        """Observations for the policy group."""
+
+        actions = ObsTerm(func=mdp.last_action)
+        robot_joint_pos = ObsTerm(
+            func=base_mdp.joint_pos,
+            params={"asset_cfg": SceneEntityCfg("robot")},
+        )
+        robot_root_pos = ObsTerm(func=base_mdp.root_pos_w, params={"asset_cfg": SceneEntityCfg("robot")})
+        robot_root_rot = ObsTerm(func=base_mdp.root_quat_w, params={"asset_cfg": SceneEntityCfg("robot")})
+
+        left_eef_pos = ObsTerm(func=mdp.get_eef_pos, params={"link_name": "LEFT_GRIPPER_Z_LINK"})
+        left_eef_quat = ObsTerm(func=mdp.get_eef_quat, params={"link_name": "LEFT_GRIPPER_Z_LINK"})
+        right_eef_pos = ObsTerm(func=mdp.get_eef_pos, params={"link_name": "RIGHT_GRIPPER_Z_LINK"})
+        right_eef_quat = ObsTerm(func=mdp.get_eef_quat, params={"link_name": "RIGHT_GRIPPER_Z_LINK"})
+
+        def __post_init__(self):
+            self.enable_corruption = False
+            self.concatenate_terms = False
+
+    policy: PolicyCfg = PolicyCfg()
+
+
 @register_asset
 class AlexAbilityHandEmbodiment(AlexTeleopEmbodimentMixin, EmbodimentBase):
     """Embodiment for the IHMC Alex V1 robot with Psyonic Ability Hands and PINK IK wrist control.
@@ -1773,22 +1829,40 @@ class AlexAbilityHandEmbodiment(AlexTeleopEmbodimentMixin, EmbodimentBase):
         enable_cameras: bool = False,
         initial_pose: Pose | None = None,
         use_tiled_camera: bool = False,
+        concatenate_observation_terms: bool = False,
+        use_teleop_actuators: bool = True,
+        use_rl_action_space: bool = False,
     ):
-        super().__init__(enable_cameras, initial_pose)
+        super().__init__(enable_cameras, initial_pose, concatenate_observation_terms=concatenate_observation_terms)
 
         robot_cfg, _resolved_urdf, pink_ik_urdf = _configure_ability_hand_robot(
             self.robot_version,
-            teleop=True,
+            fix_base=True,
+            use_teleop_actuators=use_teleop_actuators,
         )
 
         self.scene_config = AlexSceneCfg()
         self.scene_config.robot = robot_cfg
 
         self.action_config = AlexAbilityHandActionsCfg()
+        if use_rl_action_space:
+            # Absolute-pose Pink IK actions are unsafe for a freshly-initialized RL policy (see
+            # RLPinkIKAction's docstring); swap in the bounded delta-pose variant, reusing the
+            # same controller/joint-name cfg so the two variants stay in lockstep.
+            self.action_config.upper_body_ik = RLPinkIKActionCfg(
+                pink_controlled_joint_names=self.action_config.upper_body_ik.pink_controlled_joint_names,
+                hand_joint_names=self.action_config.upper_body_ik.hand_joint_names,
+                target_eef_link_names=self.action_config.upper_body_ik.target_eef_link_names,
+                asset_name=self.action_config.upper_body_ik.asset_name,
+                controller=self.action_config.upper_body_ik.controller,
+            )
         self.action_config.upper_body_ik.controller.urdf_path = pink_ik_urdf
         self.action_config.upper_body_ik.controller.mesh_path = None
 
-        self.observation_config = AlexAbilityHandObservationsCfg()
+        if self.concatenate_observation_terms:
+            self.observation_config = AlexAbilityHandRLObservationsCfg()
+        else:
+            self.observation_config = AlexAbilityHandObservationsCfg()
         self.observation_config.policy.concatenate_terms = self.concatenate_observation_terms
         self.event_config = AlexEventCfg()
         _configure_camera_events(self.event_config, enable_cameras)
@@ -1997,14 +2071,16 @@ class AlexAbilityHandJointPositionEmbodiment(EmbodimentBase):
         enable_cameras: bool = False,
         initial_pose: Pose | None = None,
         use_tiled_camera: bool = False,
+        concatenate_observation_terms: bool = False,
     ):
-        super().__init__(enable_cameras, initial_pose)
+        super().__init__(enable_cameras, initial_pose, concatenate_observation_terms=concatenate_observation_terms)
 
         # Match teleop physics (fixed base, stiff arm tracking) so recorded
         # processed_actions replay faithfully; only the action interface differs.
         robot_cfg, _resolved_urdf, _pink_ik_urdf = _configure_ability_hand_robot(
             self.robot_version,
-            teleop=True,
+            fix_base=True,
+            use_teleop_actuators=True,
         )
 
         self.scene_config = AlexSceneCfg()
@@ -2012,7 +2088,10 @@ class AlexAbilityHandJointPositionEmbodiment(EmbodimentBase):
 
         self.action_config = AlexAbilityHandJointPositionActionsCfg()
 
-        self.observation_config = AlexAbilityHandObservationsCfg()
+        if self.concatenate_observation_terms:
+            self.observation_config = AlexAbilityHandRLObservationsCfg()
+        else:
+            self.observation_config = AlexAbilityHandObservationsCfg()
         self.observation_config.policy.concatenate_terms = self.concatenate_observation_terms
         self.event_config = AlexEventCfg()
         _configure_camera_events(self.event_config, enable_cameras)

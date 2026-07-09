@@ -6,22 +6,27 @@
 """Record Alex + lever demonstrations from a scripted Cartesian path, not teleop.
 
 The lever's live world pose is read straight out of the scene (no human
-operator needed), a reach -> grasp -> pull-through-range -> release -> retreat
-path is built relative to that pose, and the resulting per-step actions are
-recorded through the same hdf5 pipeline ``record_demos.py`` uses -- so the
-output dataset is a drop-in for existing GR00T / CCIL training.
+operator needed). The scripted motion closes the hand into a fist, moves above
+the lever, then pushes straight down through the lever's range -- rather than
+grasping the handle and rotating the wrist to match it -- since a fixed-fist
+push is an easier target for a policy to learn than a precision grasp. The
+resulting per-step actions are recorded through the same hdf5 pipeline
+``record_demos.py`` uses -- so the output dataset is a drop-in for existing
+GR00T / CCIL training.
 
 Only ``alex_v2_ability_hands`` (Pink IK, world-frame wrist targets + raw hand
-joints) is supported: the reach path is expressed as absolute end-effector
-poses, which that action term consumes directly. Only single-env
-(``--num_envs 1``) runs are supported -- the arm-path math below is unbatched.
+joints) is supported: the path is expressed as absolute end-effector poses,
+which that action term consumes directly. Only single-env (``--num_envs 1``)
+runs are supported -- the arm-path math below is unbatched.
 
-The grasp geometry (where on the handle to grip, what orientation, how far to
-stand off before closing the hand) is **not** derived from the mesh -- it is a
-CLI-tunable guess, in the same spirit as the board placement in
-``alex_empty_environment.py``. Run once with ``--enable_cameras --viz kit`` to
-watch the reach in the GUI and adjust ``--grasp_local_offset`` /
-``--grasp_local_rot`` / ``--approach_local_offset`` before recording for real.
+The push geometry (where above the lever to press, how far to stand off before
+descending) is **not** derived from the mesh -- it is a CLI-tunable guess, in
+the same spirit as the board placement in ``alex_empty_environment.py``. The
+wrist keeps its starting orientation throughout (no rotation needed to press
+down) and "up"/"down" are world Z, not the lever's own (possibly tilted/yawed)
+frame. Run once with ``--enable_cameras --viz kit`` to watch the motion in the
+GUI and adjust ``--push_local_offset`` / ``--approach_height`` /
+``--push_wrist_rot_offset`` before recording for real.
 
 Alongside the standard Arena hdf5, this also writes a companion hdf5
 (``--lever_eef_dataset_file``) with ``observation.state``/``action`` arrays
@@ -63,39 +68,54 @@ parser.add_argument(
     help="Scene key of the lever rigid object to reach for (default matches alex_empty's"
     " Lever_revolute.usd asset name).",
 )
-parser.add_argument("--arm", type=str, choices=["left", "right"], default="right", help="Which arm grasps the lever.")
+parser.add_argument("--arm", type=str, choices=["left", "right"], default="right", help="Which arm pushes the lever.")
 parser.add_argument(
-    "--grasp_local_offset",
+    "--push_local_offset",
     type=lambda arg: [float(v) for v in arg.split(",")],
     default=[-0.055, 0.0, 0.0],
-    help="Grasp point x,y,z [m] in the lever handle's own local frame (untuned guess -- verify visually).",
+    help="Press point x,y,z [m] in the lever handle's own local (rest-pose) frame -- only the"
+    " horizontal placement of the contact point over the lever (untuned guess -- verify visually).",
 )
 parser.add_argument(
-    "--grasp_local_rot",
+    "--push_wrist_rot_offset",
     type=lambda arg: [float(v) for v in arg.split(",")],
     default=[0.0, 0.0, 0.0, 1.0],
-    help="Hand orientation x,y,z,w relative to the handle's local frame at the grasp point.",
+    help="Extra hand orientation x,y,z,w applied on top of the arm's own starting (home) orientation --"
+    " held constant through the whole motion. Identity (default) keeps the wrist exactly as it starts;"
+    " this is NOT relative to the lever's orientation, since a press doesn't need the wrist to track it.",
 )
 parser.add_argument(
-    "--approach_local_offset",
-    type=lambda arg: [float(v) for v in arg.split(",")],
-    default=[0.0, 0.0, 0.08],
-    help="Extra x,y,z [m] added to --grasp_local_offset for the pre-grasp standoff pose.",
+    "--approach_height",
+    type=float,
+    default=0.08,
+    help="Standoff height [m] straight up in world Z above the press point (not the lever's local frame,"
+    " which may be tilted/yawed -- e.g. with --lever_dr).",
 )
 parser.add_argument(
-    "--pull_target_deg",
+    "--push_target_deg",
     type=float,
     default=70.0,
-    help="How far to rotate the lever through its 0-90 deg range (stays clear of the hard limit).",
+    help="How far to press the lever through its 0-90 deg range (stays clear of the hard limit). Used"
+    " only to size the vertical push depth via the hinge geometry -- the hand still moves in a"
+    " straight line down (see --min_push_depth), not along the lever's own arc.",
 )
-parser.add_argument("--close_fraction", type=float, default=0.9, help="How far to close the hand for the grasp.")
+parser.add_argument(
+    "--min_push_depth",
+    type=float,
+    default=0.03,
+    help="Floor [m] on the world-Z push depth computed from --push_target_deg, in case the hinge-geometry"
+    " estimate comes out too small (or the wrong sign) to actually depress the lever.",
+)
+parser.add_argument("--close_fraction", type=float, default=1.0, help="How far to close the hand into a fist.")
 parser.add_argument("--hold_steps", type=int, default=15, help="Steps to settle at the arm's starting pose.")
-parser.add_argument("--approach_steps", type=int, default=45, help="Steps from start to the pre-grasp standoff.")
-parser.add_argument("--grasp_approach_steps", type=int, default=30, help="Steps from standoff to the grasp point.")
-parser.add_argument("--close_steps", type=int, default=20, help="Steps to close the hand at the grasp point.")
-parser.add_argument("--pull_steps", type=int, default=90, help="Steps to sweep the lever through --pull_target_deg.")
-parser.add_argument("--release_steps", type=int, default=20, help="Steps to open the hand after the pull.")
-parser.add_argument("--retreat_steps", type=int, default=30, help="Steps back to the pre-grasp standoff.")
+parser.add_argument("--close_steps", type=int, default=20, help="Steps to close the hand into a fist at the home pose.")
+parser.add_argument("--approach_steps", type=int, default=45, help="Steps from home to the standoff above the lever.")
+parser.add_argument(
+    "--push_steps", type=int, default=90, help="Steps to press from the standoff down through --push_target_deg."
+)
+parser.add_argument("--dwell_steps", type=int, default=15, help="Steps to hold the pressed-down pose.")
+parser.add_argument("--retreat_steps", type=int, default=30, help="Steps back up to the standoff above the lever.")
+parser.add_argument("--release_steps", type=int, default=20, help="Steps to open the hand at the standoff.")
 parser.add_argument("--return_steps", type=int, default=30, help="Steps back to the arm's starting pose.")
 parser.add_argument(
     "--lever_eef_dataset_file",
@@ -115,10 +135,10 @@ simulation_app = app_launcher.app
 
 """Rest everything follows."""
 
-import os
-
 import h5py
+import os
 import torch
+
 import warp as wp
 from isaaclab.envs.mdp.recorders.recorders_cfg import ActionStateRecorderManagerCfg
 from isaaclab.managers import DatasetExportMode
@@ -128,7 +148,7 @@ from isaaclab_arena.embodiments.alex.alex import (
     ALEX_ABILITY_HAND_WRIST_ACTION_DIM,
     build_ability_hand_joint_action,
 )
-from isaaclab_arena.utils.cartesian_waypoints import ArcSegment, LinearSegment, arc_pose_at, play_segments
+from isaaclab_arena.utils.cartesian_waypoints import LinearSegment, play_segments
 from isaaclab_arena.utils.isaaclab_utils.recorders import ArenaEnvRecorderManagerCfg
 
 # H2Ozone/lever_eef's hand-joint layout groups per finger (q1, q2) and per side, unlike the
@@ -150,9 +170,7 @@ _LEVER_EEF_HAND_JOINT_ORDER = [
         "thumb_q2",
     )
 ]
-_PINK_IK_TO_LEVER_EEF_HAND_PERM = [
-    ABILITY_HAND_TELEOP_JOINT_ORDER.index(name) for name in _LEVER_EEF_HAND_JOINT_ORDER
-]
+_PINK_IK_TO_LEVER_EEF_HAND_PERM = [ABILITY_HAND_TELEOP_JOINT_ORDER.index(name) for name in _LEVER_EEF_HAND_JOINT_ORDER]
 _LEVER_EEF_NECK_JOINT_NAMES = ["NECK_Z", "NECK_Y"]
 
 
@@ -212,64 +230,60 @@ def _object_pose(env, object_name: str) -> tuple[torch.Tensor, torch.Tensor]:
 
 
 def _build_lever_path(env, device: torch.device):
-    """Reach -> grasp -> pull -> release -> retreat -> home, as Cartesian segments."""
+    """Close hand -> move above the lever -> push straight down -> dwell -> retreat -> release -> home.
+
+    Both wrist orientation and the vertical (approach/press/retreat) motion are
+    deliberately decoupled from the lever's own orientation: the fist keeps its
+    starting (home) orientation the whole time -- pressing down doesn't need any
+    wrist rotation -- and "up"/"down" are literal world Z, not the handle's local
+    frame (which is tilted/yawed, especially with ``--lever_dr``; rotating those
+    offsets through it was sending the hand sideways instead of down). Only the
+    horizontal (x, y) placement of the contact point tracks the lever's live
+    pose, since that's what determines *where* on the lever to press.
+    """
     import math
 
-    from isaaclab.utils.math import quat_apply, quat_mul
+    from isaaclab.utils.math import quat_apply, quat_from_angle_axis, quat_mul
 
     gripper_link = f"{args_cli.arm.upper()}_GRIPPER_Z_LINK"
     home_pos, home_quat = _wrist_pose(env, gripper_link)
     handle_pos, handle_quat = _object_pose(env, args_cli.object_name)
 
-    grasp_local_offset = torch.tensor(args_cli.grasp_local_offset, device=device, dtype=home_pos.dtype)
-    grasp_local_rot = torch.tensor(args_cli.grasp_local_rot, device=device, dtype=home_quat.dtype)
-    approach_local_offset = grasp_local_offset + torch.tensor(
-        args_cli.approach_local_offset, device=device, dtype=home_pos.dtype
-    )
+    push_local_offset = torch.tensor(args_cli.push_local_offset, device=device, dtype=home_pos.dtype)
+    push_wrist_rot_offset = torch.tensor(args_cli.push_wrist_rot_offset, device=device, dtype=home_quat.dtype)
+    push_quat = quat_mul(home_quat.unsqueeze(0), push_wrist_rot_offset.unsqueeze(0)).squeeze(0)
 
-    grasp_pos = handle_pos + quat_apply(handle_quat.unsqueeze(0), grasp_local_offset.unsqueeze(0)).squeeze(0)
-    grasp_quat = quat_mul(handle_quat.unsqueeze(0), grasp_local_rot.unsqueeze(0)).squeeze(0)
-    pregrasp_pos = handle_pos + quat_apply(handle_quat.unsqueeze(0), approach_local_offset.unsqueeze(0)).squeeze(0)
-    pregrasp_quat = grasp_quat
+    contact_pos = handle_pos + quat_apply(handle_quat.unsqueeze(0), push_local_offset.unsqueeze(0)).squeeze(0)
+    world_up = torch.tensor([0.0, 0.0, 1.0], device=device, dtype=contact_pos.dtype)
+    above_pos = contact_pos + args_cli.approach_height * world_up
+
+    # Depth estimate only: how far the contact point would drop in world Z if the lever rotated
+    # through --push_target_deg about its hinge. The hand still travels in a straight vertical
+    # line from contact_pos, not along this arc -- contact dynamics do the rest.
     axis_world = quat_apply(handle_quat.unsqueeze(0), torch.tensor([[0.0, 1.0, 0.0]], device=device)).squeeze(0)
+    push_angle = torch.tensor([math.radians(args_cli.push_target_deg)], device=device, dtype=axis_world.dtype)
+    push_rot = quat_from_angle_axis(push_angle, axis_world.unsqueeze(0)).squeeze(0)
+    rotated_contact_pos = handle_pos + quat_apply(
+        push_rot.unsqueeze(0), (contact_pos - handle_pos).unsqueeze(0)
+    ).squeeze(0)
+    push_depth = max(float(contact_pos[2] - rotated_contact_pos[2]), args_cli.min_push_depth)
+    pushed_pos = contact_pos - push_depth * world_up
 
     left_close = args_cli.close_fraction if args_cli.arm == "left" else 0.0
     right_close = args_cli.close_fraction if args_cli.arm == "right" else 0.0
     open_hand = build_ability_hand_joint_action(0.0, 0.0, device=device)
     closed_hand = build_ability_hand_joint_action(left_close, right_close, device=device)
 
-    segments: list[LinearSegment | ArcSegment] = [
+    return [
         LinearSegment(home_pos, home_quat, open_hand, home_pos, home_quat, open_hand, args_cli.hold_steps),
-        LinearSegment(
-            home_pos, home_quat, open_hand, pregrasp_pos, pregrasp_quat, open_hand, args_cli.approach_steps
-        ),
-        LinearSegment(
-            pregrasp_pos, pregrasp_quat, open_hand, grasp_pos, grasp_quat, open_hand, args_cli.grasp_approach_steps
-        ),
-        LinearSegment(grasp_pos, grasp_quat, open_hand, grasp_pos, grasp_quat, closed_hand, args_cli.close_steps),
+        LinearSegment(home_pos, home_quat, open_hand, home_pos, home_quat, closed_hand, args_cli.close_steps),
+        LinearSegment(home_pos, home_quat, closed_hand, above_pos, push_quat, closed_hand, args_cli.approach_steps),
+        LinearSegment(above_pos, push_quat, closed_hand, pushed_pos, push_quat, closed_hand, args_cli.push_steps),
+        LinearSegment(pushed_pos, push_quat, closed_hand, pushed_pos, push_quat, closed_hand, args_cli.dwell_steps),
+        LinearSegment(pushed_pos, push_quat, closed_hand, above_pos, push_quat, closed_hand, args_cli.retreat_steps),
+        LinearSegment(above_pos, push_quat, closed_hand, above_pos, push_quat, open_hand, args_cli.release_steps),
+        LinearSegment(above_pos, push_quat, open_hand, home_pos, home_quat, open_hand, args_cli.return_steps),
     ]
-    pull_arc = ArcSegment(
-        grasp_pos,
-        grasp_quat,
-        closed_hand,
-        handle_pos,
-        axis_world,
-        math.radians(args_cli.pull_target_deg),
-        closed_hand,
-        args_cli.pull_steps,
-    )
-    segments.append(pull_arc)
-    pull_end_pos, pull_end_quat = arc_pose_at(pull_arc, 1.0)
-    segments += [
-        LinearSegment(
-            pull_end_pos, pull_end_quat, closed_hand, pull_end_pos, pull_end_quat, open_hand, args_cli.release_steps
-        ),
-        LinearSegment(
-            pull_end_pos, pull_end_quat, open_hand, pregrasp_pos, pregrasp_quat, open_hand, args_cli.retreat_steps
-        ),
-        LinearSegment(pregrasp_pos, pregrasp_quat, open_hand, home_pos, home_quat, open_hand, args_cli.return_steps),
-    ]
-    return segments
 
 
 def _bimanual_wrist_targets(
@@ -364,9 +378,7 @@ def main() -> None:
 
             if lever_eef_file is not None:
                 episode_group = lever_eef_file.create_group(f"data/demo_{recorded - 1}")
-                episode_group.create_dataset(
-                    "observation.state", data=torch.stack(lever_eef_states).cpu().numpy()
-                )
+                episode_group.create_dataset("observation.state", data=torch.stack(lever_eef_states).cpu().numpy())
                 episode_group.create_dataset("action", data=torch.stack(lever_eef_actions).cpu().numpy())
 
     env.close()

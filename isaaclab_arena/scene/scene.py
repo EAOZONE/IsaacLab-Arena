@@ -9,7 +9,6 @@ from typing import Any, Union
 from isaaclab.assets import AssetBaseCfg, RigidObjectCfg
 from isaaclab.assets.articulation.articulation_cfg import ArticulationCfg
 from isaaclab.sensors.contact_sensor.contact_sensor_cfg import ContactSensorCfg
-from pxr import Gf, Usd, UsdGeom
 
 from isaaclab_arena.assets.asset import Asset
 from isaaclab_arena.assets.object import Object
@@ -17,7 +16,6 @@ from isaaclab_arena.assets.object_base import ObjectType
 from isaaclab_arena.assets.object_reference import ObjectReference
 from isaaclab_arena.assets.object_set import RigidObjectSet
 from isaaclab_arena.utils.configclass import make_configclass
-from isaaclab_arena.utils.phyx_utils import add_contact_report
 from isaaclab_arena.variations.variation_base import VariationBase
 
 AssetCfg = Union[AssetBaseCfg, RigidObjectCfg, ArticulationCfg, ContactSensorCfg]
@@ -148,6 +146,8 @@ def export_scene_to_usd(scene: Scene, output_path: pathlib.Path, root_prim_path:
         output_path: The path to the USD file to export to.
         root_prim_path: The path to the root prim in the USD file.
     """
+    from pxr import Usd
+
     # Create a new stage for composition
     stage_out = Usd.Stage.CreateInMemory()
     # Add the root/default prim
@@ -162,7 +162,7 @@ def export_scene_to_usd(scene: Scene, output_path: pathlib.Path, root_prim_path:
     flattened_layer.Export(output_path.as_posix())
 
 
-def _create_prim_from_asset(stage: Usd.Stage, asset: Asset) -> None:
+def _create_prim_from_asset(stage, asset: Asset) -> None:
     """Adds a prim to the stage for the given asset.
 
     This is used internally by the scene.export_to_usd method.
@@ -174,6 +174,10 @@ def _create_prim_from_asset(stage: Usd.Stage, asset: Asset) -> None:
         stage: The stage to add the prim to.
         asset: The asset to add to the stage.
     """
+    from pxr import Gf, UsdGeom
+
+    from isaaclab_arena.utils.phyx_utils import add_contact_report
+
     assert isinstance(asset, Object)
     # Get the default prim path
     default_prim_path = stage.GetDefaultPrim().GetPath()
@@ -208,7 +212,9 @@ def _create_prim_from_asset(stage: Usd.Stage, asset: Asset) -> None:
     prim_xform.AddScaleOp(precision=s_precision).Set(s)
 
 
-def _is_double_precision(op: UsdGeom.XformOp) -> bool | None:
+def _is_double_precision(op) -> bool | None:
+    from pxr import UsdGeom
+
     # Detect if the op is None or doesn't contain precision.
     # In this case we default to float precision.
     if not op:

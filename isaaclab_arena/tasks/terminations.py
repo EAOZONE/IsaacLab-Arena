@@ -241,6 +241,7 @@ def goal_pose_task_termination(
     return success
 
 
+
 def root_height_below_minimum_multi_objects(
     env: ManagerBasedRLEnv,
     minimum_height: float,
