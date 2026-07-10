@@ -1235,6 +1235,30 @@ def build_ability_hand_joint_action(
     return torch.where(_ABILITY_HAND_IS_LEFT_JOINT, caps_left, caps_right).to(device=device)
 
 
+_ABILITY_HAND_THUMB_JOINT_SUFFIXES = ("thumb_q1", "thumb_q2")
+_ABILITY_HAND_IS_THUMB_JOINT = torch.tensor(
+    [name.endswith(_ABILITY_HAND_THUMB_JOINT_SUFFIXES) for name in ABILITY_HAND_TELEOP_JOINT_ORDER]
+)
+
+
+def build_ability_hand_thumbs_up_action(
+    left_close_fraction: float = 0.0,
+    right_close_fraction: float = 0.0,
+    device: torch.device | str = "cpu",
+) -> torch.Tensor:
+    """Like :func:`build_ability_hand_joint_action`, but the thumb stays fully open.
+
+    Curling the four fingers while leaving the thumb at its open (extended, not
+    opposed across the palm) pose gives a "thumbs up" fist instead of a full
+    grasp — for scripted pushes where the thumb should stay clear of the
+    contact surface rather than curl into it.
+    """
+    closed = build_ability_hand_joint_action(left_close_fraction, right_close_fraction, device=device)
+    open_hand = build_ability_hand_joint_action(0.0, 0.0, device=device)
+    thumb_mask = _ABILITY_HAND_IS_THUMB_JOINT.to(device=device)
+    return torch.where(thumb_mask, open_hand, closed)
+
+
 _ALEX_XR_CFG = XrCfg(
     anchor_pos=(0.0, 0.0, -1.0),
     anchor_rot=(0.0, 0.0, -0.70711, 0.70711),

@@ -7,12 +7,13 @@
 GR00T N1.6 modality config for the real-robot Alex EEF dataset
 (https://huggingface.co/datasets/H2Ozone/test_obs_new).
 
-State is a 38-dim layout: left/right gripper poses in the robot's world frame
-using IHMC hand control frames (pos 3 + quat xyzw 4 each, scalar-last), 20
-ability-hand finger joints (per-finger q1/q2, left then right), 2 neck joints,
-and 2 spine joints. Action shares the same layout minus the spine (36-dim) —
-spine is not a commanded stream in this dataset. Group slicing matches
-``alex_test_obs_new_modality.json``.
+State is a 48-dim layout: left/right gripper poses in the robot's world frame
+using IHMC hand control frames (pos 3 + quat xyzw 4 each, scalar-last),
+left/right forearm orientation quaternions (quat xyzw 4 each, scalar-last),
+a head/neck orientation quaternion (quat xyzw 4, scalar-last), 20 ability-hand
+finger joints (per-finger q1/q2, left then right), and 2 spine joints. Action
+shares the same layout minus the spine (46-dim) — spine is not a commanded
+stream in this dataset. Group slicing matches ``alex_test_obs_new_modality.json``.
 
 The HF dataset is LeRobot v3.0; convert it to the episode-per-file layout
 GR00T's loader expects with ``convert_lerobot_v3_to_gr00t.py`` first (the
@@ -36,23 +37,27 @@ ALEX_TEST_OBS_NEW_ACTION_HORIZON = 16
 _STATE_GROUPS = [
     "left_wrist_pose",
     "right_wrist_pose",
+    "left_forearm",
+    "right_forearm",
+    "neck",
     "left_hand",
     "right_hand",
-    "neck",
     "spine",
 ]
 
 _ACTION_GROUPS = [
     "left_wrist_pose",
     "right_wrist_pose",
+    "left_forearm",
+    "right_forearm",
+    "neck",
     "left_hand",
     "right_hand",
-    "neck",
 ]
 
-# sin/cos embedding suits revolute joint angles; wrist poses (positions + quats)
-# are kept raw.
-_SIN_COS_STATE_GROUPS = ["left_hand", "right_hand", "neck", "spine"]
+# sin/cos embedding suits revolute joint angles; wrist/forearm/neck poses
+# (positions and/or quats) are kept raw.
+_SIN_COS_STATE_GROUPS = ["left_hand", "right_hand", "spine"]
 
 alex_test_obs_new_config = {
     "video": ModalityConfig(

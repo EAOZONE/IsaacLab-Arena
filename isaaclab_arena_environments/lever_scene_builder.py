@@ -17,6 +17,7 @@ from pathlib import Path
 
 from isaaclab_arena.assets.asset import Asset
 from isaaclab_arena.assets.object import Object
+from isaaclab_arena.assets.object_base import ObjectType
 from isaaclab_arena.utils.pose import Pose, PoseRange
 
 # Tuned lever-board pose (see Pictures/Screenshots 2026-07-04). Lever_revolute.usd (2026-07-07)
@@ -33,10 +34,11 @@ from isaaclab_arena.utils.pose import Pose, PoseRange
 # re-tips an already-flat board. The handle's own rest-facing direction is controlled by the
 # RevoluteJoint's local frames inside the asset, not by any board-level spawn rotation -- see
 # Handle_1's RevoluteJoint localRot0/localRot1 in Lever_revolute.usd.
-LEVER_USD_STEMS = ("lever", "lever_revolute", "new_lever")
+LEVER_USD_STEMS = ("lever", "lever_revolute", "new_lever", "lever_again")
 LEVER_USD_DEFAULT_POS = (-0.05062, -0.51385, 0.75167)
 LEVER_USD_DEFAULT_YAW = 180.0
 LEVER_USD_DEFAULT_SCALE = 0.0254
+LEVER_AGAIN_STEM = "lever_again"
 
 # lever_dr (opt-in) reset-time pose jitter, on top of usd_yaw's nominal yaw.
 _LEVER_DR_XY_JITTER = 0.02  # +/- meters, x and y independently
@@ -59,6 +61,10 @@ _LEVER_HANDLE_MESH_NAME = (
     "/Layout_v9/Blue_Handled_Valve_v3_1/Blue_Handled_Valve_v3/base_link_1/base_link/"
     "Hex_Nut_ANSI_B18_2_2___5_16_24_Steel_Grade_2H_Plain_v1_1/"
     "Hex_Nut_ANSI_B18_2_2___5_16_24_Steel_Grade_2H_Plain_v1/Handle_1/Handle/Body1/Body1"
+)
+LEVER_HANDLE_RIGID_BODY_SUFFIX = (
+    "/Layout_v9/Blue_Handled_Valve_v3_1/Blue_Handled_Valve_v3/base_link_1/base_link/"
+    "Hex_Nut_ANSI_B18_2_2___5_16_24_Steel_Grade_2H_Plain_v1_1/Handle_1"
 )
 
 # Workbench placed under the lever board (visual sim2real: the real lever_eef dataset was
@@ -119,10 +125,12 @@ def build_lever_scene_assets(
     else:
         usd_initial_pose = Pose(position_xyz=usd_pos, rotation_xyzw=lever_rotation_xyzw)
 
+    usd_stem = Path(usd_path).stem.lower()
     lever_object = Object(
-        name=Path(usd_path).stem.lower().replace("(", "_").replace(")", "_"),
+        name=usd_stem.replace("(", "_").replace(")", "_"),
         usd_path=usd_path,
         initial_pose=usd_initial_pose,
+        object_type=ObjectType.BASE if usd_stem == LEVER_AGAIN_STEM else None,
         scale=(usd_scale, usd_scale, usd_scale),
     )
     scene_assets: list[Asset] = [lever_object]

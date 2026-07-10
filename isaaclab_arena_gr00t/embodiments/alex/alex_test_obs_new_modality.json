@@ -10,25 +10,35 @@
             "start": 7,
             "end": 14
         },
-        "left_hand": {
+        "left_forearm": {
             "original_key": "observation.state",
             "start": 14,
-            "end": 24
+            "end": 18
         },
-        "right_hand": {
+        "right_forearm": {
             "original_key": "observation.state",
-            "start": 24,
-            "end": 34
+            "start": 18,
+            "end": 22
         },
         "neck": {
             "original_key": "observation.state",
-            "start": 34,
+            "start": 22,
+            "end": 26
+        },
+        "left_hand": {
+            "original_key": "observation.state",
+            "start": 26,
             "end": 36
+        },
+        "right_hand": {
+            "original_key": "observation.state",
+            "start": 36,
+            "end": 46
         },
         "spine": {
             "original_key": "observation.state",
-            "start": 36,
-            "end": 38
+            "start": 46,
+            "end": 48
         }
     },
     "action": {
@@ -42,20 +52,30 @@
             "start": 7,
             "end": 14
         },
-        "left_hand": {
+        "left_forearm": {
             "original_key": "action",
             "start": 14,
-            "end": 24
+            "end": 18
         },
-        "right_hand": {
+        "right_forearm": {
             "original_key": "action",
-            "start": 24,
-            "end": 34
+            "start": 18,
+            "end": 22
         },
         "neck": {
             "original_key": "action",
-            "start": 34,
+            "start": 22,
+            "end": 26
+        },
+        "left_hand": {
+            "original_key": "action",
+            "start": 26,
             "end": 36
+        },
+        "right_hand": {
+            "original_key": "action",
+            "start": 36,
+            "end": 46
         }
     },
     "video": {
