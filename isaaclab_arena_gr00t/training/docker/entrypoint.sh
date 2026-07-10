@@ -4,10 +4,10 @@
 # Required env:
 #   HF_TOKEN          HuggingFace token with write access (unless SKIP_UPLOAD=1)
 # Optional env (defaults shown):
-#   HF_DATASET_ID     H2Ozone/lever_eef      dataset repo to download
-#   HF_MODEL_REPO     H2Ozone/lever_eef_gr00t   model repo to upload to
-#   MODALITY_CONFIG   alex_lever_eef_data_config.py  GR00T modality config path
-#   MODALITY_TEMPLATE alex_lever_eef_modality.json   modality.json for v3 conversion
+#   HF_DATASET_ID     H2Ozone/test_obs_new      dataset repo to download
+#   HF_MODEL_REPO     H2Ozone/test_obs_new_gr00t   model repo to upload to
+#   MODALITY_CONFIG   alex_test_obs_new_data_config.py  GR00T modality config path
+#   MODALITY_TEMPLATE alex_test_obs_new_modality.json   modality.json for v3 conversion
 #   ACTION_FROM_STATE_DIMS  ""      optional action dims filled from state at conversion
 #   SKIP_UPLOAD       0     set 1 to train without uploading
 #   UPLOAD_OPTIMIZER_STATE  0     set 1 to also upload optimizer/scheduler/rng state
@@ -33,8 +33,8 @@
 
 set -euo pipefail
 
-HF_DATASET_ID="${HF_DATASET_ID:-H2Ozone/lever_eef}"
-HF_MODEL_REPO="${HF_MODEL_REPO:-H2Ozone/lever_eef_gr00t}"
+HF_DATASET_ID="${HF_DATASET_ID:-H2Ozone/test_obs_new}"
+HF_MODEL_REPO="${HF_MODEL_REPO:-H2Ozone/test_obs_new_gr00t}"
 SKIP_UPLOAD="${SKIP_UPLOAD:-0}"
 SKIP_DOWNLOAD="${SKIP_DOWNLOAD:-0}"
 # Lives under /cache so the dataset download persists with the same volume/bind
@@ -43,9 +43,9 @@ DATASET_DIR_NAME="${HF_DATASET_ID//\//__}"
 DATASET_PATH="${DATASET_PATH:-/cache/dataset/${DATASET_DIR_NAME}}"
 OUTPUT_DIR="${OUTPUT_DIR:-/checkpoints}"
 ARENA_DIR=/workspace/IsaacLab-Arena
-MODALITY_CONFIG="${MODALITY_CONFIG:-${ARENA_DIR}/isaaclab_arena_gr00t/embodiments/alex/alex_lever_eef_data_config.py}"
-MODALITY_TEMPLATE="${MODALITY_TEMPLATE:-${ARENA_DIR}/isaaclab_arena_gr00t/embodiments/alex/alex_lever_eef_modality.json}"
-# H2Ozone/lever_eef has real 36-dim EEF actions; keep them untouched by default.
+MODALITY_CONFIG="${MODALITY_CONFIG:-${ARENA_DIR}/isaaclab_arena_gr00t/embodiments/alex/alex_test_obs_new_data_config.py}"
+MODALITY_TEMPLATE="${MODALITY_TEMPLATE:-${ARENA_DIR}/isaaclab_arena_gr00t/embodiments/alex/alex_test_obs_new_modality.json}"
+# H2Ozone/test_obs_new has real 36-dim EEF actions (no spine); keep them untouched by default.
 # Set e.g. "13:33" only for older datasets with missing command streams.
 ACTION_FROM_STATE_DIMS="${ACTION_FROM_STATE_DIMS:-}"
 BASE_MODEL_PATH="${BASE_MODEL_PATH:-nvidia/GR00T-N1.6-3B}"

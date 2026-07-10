@@ -1,0 +1,74 @@
+{
+    "state": {
+        "left_wrist_pose": {
+            "original_key": "observation.state",
+            "start": 0,
+            "end": 7
+        },
+        "right_wrist_pose": {
+            "original_key": "observation.state",
+            "start": 7,
+            "end": 14
+        },
+        "left_hand": {
+            "original_key": "observation.state",
+            "start": 14,
+            "end": 24
+        },
+        "right_hand": {
+            "original_key": "observation.state",
+            "start": 24,
+            "end": 34
+        },
+        "neck": {
+            "original_key": "observation.state",
+            "start": 34,
+            "end": 36
+        },
+        "spine": {
+            "original_key": "observation.state",
+            "start": 36,
+            "end": 38
+        }
+    },
+    "action": {
+        "left_wrist_pose": {
+            "original_key": "action",
+            "start": 0,
+            "end": 7
+        },
+        "right_wrist_pose": {
+            "original_key": "action",
+            "start": 7,
+            "end": 14
+        },
+        "left_hand": {
+            "original_key": "action",
+            "start": 14,
+            "end": 24
+        },
+        "right_hand": {
+            "original_key": "action",
+            "start": 24,
+            "end": 34
+        },
+        "neck": {
+            "original_key": "action",
+            "start": 34,
+            "end": 36
+        }
+    },
+    "video": {
+        "cam_zed_left": {
+            "original_key": "observation.images.cam_zed_left"
+        },
+        "cam_zed_right": {
+            "original_key": "observation.images.cam_zed_right"
+        }
+    },
+    "annotation": {
+        "human.action.task_description": {
+            "original_key": "task_index"
+        }
+    }
+}
