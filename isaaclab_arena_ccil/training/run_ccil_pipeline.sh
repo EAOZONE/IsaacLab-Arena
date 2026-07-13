@@ -14,7 +14,9 @@
 #   POLICY_PT=/path/to/CCIL/output/policy.pt \
 #   bash isaaclab_arena_ccil/training/run_ccil_pipeline.sh <stage>
 #
-#   <stage> = convert | export    (training stages run inside the CCIL repo, see README)
+#   <stage> = convert | convert_visual | export
+#   State-only CCIL training stages run inside the CCIL repo, see README.
+#   Visual BC training runs with train_visual_bc.py, see README.
 
 set -euo pipefail
 
@@ -30,13 +32,20 @@ case "${stage}" in
   convert)
     "${PY}" "${HERE}/../data/convert_hdf5_to_ccil.py" --hdf5_file "${HDF5}" --out_file "${PICKLE}"
     ;;
+  convert_visual)
+    "${PY}" "${HERE}/../data/convert_hdf5_to_ccil.py" \
+      --hdf5_file "${HDF5}" \
+      --out_file "${PICKLE}" \
+      --image_keys zed_left_cam_rgb zed_right_cam_rgb \
+      --image_size 128 128
+    ;;
   export)
     POLICY_PT="${POLICY_PT:?Set POLICY_PT to the TorchScript policy.pt from CCIL train_bc_policy.py}"
     "${PY}" "${HERE}/export_bc_to_torch.py" --policy_pt "${POLICY_PT}" --pickle "${PICKLE}" --out_meta "${META}"
     ;;
   *)
-    echo "Unknown stage '${stage}'. Stages: convert | export." >&2
-    echo "CCIL training (train_dynamics_model / gen_aug_label / train_bc_policy) runs in the py3.8 CCIL env; see README.md." >&2
+    echo "Unknown stage '${stage}'. Stages: convert | convert_visual | export." >&2
+    echo "State-only CCIL training runs in the py3.8 CCIL env; visual BC uses train_visual_bc.py. See README.md." >&2
     exit 2
     ;;
 esac

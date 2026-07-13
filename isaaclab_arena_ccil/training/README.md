@@ -29,6 +29,43 @@ Only needs `h5py` + `numpy`:
 
 Produces a list of `{"observations": (T,49), "actions": (T,34)}` trajectory dicts.
 
+For stereo ZED visuomotor BC, include the recorded camera streams and resize them to
+128×128:
+
+```bash
+/isaac-sim/python.sh isaaclab_arena_ccil/data/convert_hdf5_to_ccil.py \
+  --hdf5_file /datasets/alex_microwave/demo.hdf5 \
+  --out_file  /datasets/alex_microwave/ccil/alex_microwave_visual.pkl \
+  --image_keys zed_left_cam_rgb zed_right_cam_rgb \
+  --image_size 128 128
+```
+
+The visual pickle keeps the state/action fields and adds
+`images/{zed_left_cam_rgb,zed_right_cam_rgb}` as `(T,3,128,128)` uint8 arrays.
+
+## Convert a LeRobot dataset to CCIL
+
+For LeRobot datasets, convert directly from either a local LeRobot directory or a Hugging
+Face dataset repo. For example, `H2Ozone/test_obs_new` stores 48-D `observation.state`,
+46-D `action`, and ZED videos named `observation.images.cam_zed_left/right`:
+
+```bash
+/isaac-sim/python.sh isaaclab_arena_ccil/data/convert_lerobot_to_ccil.py \
+  --repo_id H2Ozone/test_obs_new \
+  --out_file /datasets/test_obs_new/ccil/test_obs_new.pkl
+```
+
+To include the ZED videos for visual BC:
+
+```bash
+/isaac-sim/python.sh isaaclab_arena_ccil/data/convert_lerobot_to_ccil.py \
+  --repo_id H2Ozone/test_obs_new \
+  --out_file /datasets/test_obs_new/ccil/test_obs_new_visual.pkl \
+  --image_keys observation.images.cam_zed_left observation.images.cam_zed_right \
+  --output_image_keys zed_left_cam_rgb zed_right_cam_rgb \
+  --image_size 128 128
+```
+
 ## 2. Set up the CCIL Python 3.8 env (offline)
 
 ```bash
@@ -131,3 +168,62 @@ a plain `state_dict` + full normalization meta from the d3rlpy model in the CCIL
 policy MLP weights and the `standard` obs scaler `mean`/`std` and `min_max` action scaler
 `min`/`max` into `ccil_bc_meta.json` with `hidden_units`/`activation`). `CCILBCPolicy` then
 reconstructs the MLP from that meta. See `ccil_bc_policy.py:_load_model`.
+
+## Visual BC with ZED stereo
+
+The ZED image path is BC-only: it trains on recorded samples with images plus robot state.
+It does not run CCIL corrective dynamics/augmentation, because those generated labels do
+not have corresponding camera frames.
+
+```bash
+/isaac-sim/python.sh isaaclab_arena_ccil/training/train_visual_bc.py \
+  --pickle /datasets/alex_microwave/ccil/alex_microwave_visual.pkl \
+  --out_policy /datasets/alex_microwave/ccil/visual_policy.pt \
+  --out_meta /datasets/alex_microwave/ccil/visual_bc_meta.json \
+  --image_keys zed_left_cam_rgb zed_right_cam_rgb \
+  --epochs 200
+```
+
+Evaluate the visual policy with cameras enabled:
+
+```bash
+/isaac-sim/python.sh isaaclab_arena/evaluation/policy_runner.py \
+  --device cuda --enable_cameras \
+  --num_episodes 20 \
+  --policy_type isaaclab_arena_ccil.policy.ccil_bc_policy.CCILBCPolicy \
+  --model_path /datasets/alex_microwave/ccil/visual_policy.pt \
+  --meta_path /datasets/alex_microwave/ccil/visual_bc_meta.json \
+  --policy_device cuda \
+  --use_images \
+  --image_keys zed_left_cam_rgb zed_right_cam_rgb \
+  --image_size 128 128 \
+  alex_open_microwave \
+  --embodiment alex_v2_ability_hands
+```
+
+To replay a recorded LeRobot episode through the CCIL visual policy, add the
+replay-video override. For the ``test_obs_new`` adapter, recorded state and ZED frames
+advance together so the multimodal policy input remains synchronized; actions still
+drive the live simulator. In Kit, ``--show_replay_video`` opens dockable windows with
+the recorded ZED frames:
+
+```bash
+/isaac-sim/python.sh isaaclab_arena/evaluation/policy_runner.py \
+  --device cuda --enable_cameras \
+  --num_episodes 20 \
+  --policy_type isaaclab_arena_ccil.policy.ccil_bc_policy.CCILBCPolicy \
+  --model_path /datasets/test_obs_new/ccil/visual_policy.pt \
+  --meta_path /datasets/test_obs_new/ccil/visual_bc_meta.json \
+  --policy_device cuda \
+  --state_adapter test_obs_new \
+  --use_images \
+  --image_keys zed_left_cam_rgb zed_right_cam_rgb \
+  --image_size 128 128 \
+  --replay_video_dataset_path /datasets/test_obs_new/lerobot \
+  --replay_video_keys cam_zed_left cam_zed_right \
+  --replay_video_episode 0 \
+  --replay_video_stride 1 \
+  --show_replay_video \
+  alex_empty \
+  --embodiment alex_v2_ability_hands
+```

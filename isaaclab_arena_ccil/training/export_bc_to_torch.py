@@ -33,7 +33,12 @@ import argparse
 import json
 import numpy as np
 import pickle
+import sys
 import torch
+
+sys.modules.setdefault("numpy._core", np.core)
+sys.modules.setdefault("numpy._core.multiarray", np.core.multiarray)
+sys.modules.setdefault("numpy._core.numeric", np.core.numeric)
 
 
 def _sample_observations(pickle_path: str, num_ref: int, seed: int) -> np.ndarray:
