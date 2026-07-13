@@ -14,7 +14,6 @@
 Main data generation script.
 """
 
-
 """Launch Isaac Sim Simulator first."""
 
 from typing import Any
@@ -74,6 +73,7 @@ from isaaclab_mimic.datagen.generation import env_loop, setup_async_generation
 from isaaclab_mimic.datagen.utils import setup_output_paths
 
 from isaaclab_arena.utils.cameras import clear_rtx_camera_output_buffers
+from isaaclab_arena.utils.isaaclab_utils.manager_terms import bind_extracted_manager_term
 from isaaclab_arena.utils.isaaclab_utils.recorders import ArenaEnvRecorderManagerCfg
 
 # start logger
@@ -187,6 +187,7 @@ def main():
 
     if not isinstance(env, ManagerBasedRLMimicEnv):
         raise ValueError("The environment should be derived from ManagerBasedRLMimicEnv")
+    success_term = bind_extracted_manager_term(success_term, env)
 
     # check if the mimic API from this environment contains decprecated signatures
     if "action_noise_dict" not in inspect.signature(env.target_eef_pose_to_action).parameters:

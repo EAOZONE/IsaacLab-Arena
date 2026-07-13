@@ -12,7 +12,6 @@ import os
 import re
 import torch
 import warnings
-import warp as wp
 import xml.etree.ElementTree as ET
 from collections.abc import Sequence
 from dataclasses import MISSING
@@ -22,6 +21,7 @@ import isaaclab.envs.mdp as base_mdp
 import isaaclab.sim as sim_utils
 import isaaclab.utils.math as PoseUtils
 import isaaclab_tasks.manager_based.manipulation.pick_place.mdp as mdp
+import warp as wp
 from isaaclab.actuators import DelayedPDActuatorCfg, ImplicitActuatorCfg
 from isaaclab.assets.articulation import ArticulationCfg
 from isaaclab.controllers.pink_ik import DampingTaskCfg, LocalFrameTaskCfg, NullSpacePostureTaskCfg, PinkIKControllerCfg
@@ -120,8 +120,7 @@ def _alex_arena_urdf_paths(robot_version: str) -> dict[str, str]:
 
 def _mesh_path_replacements() -> dict[str, str]:
     replacements = {
-        f"package://alex_{version}_description/": _alex_description_dir(version) + "/"
-        for version in (ALEX_V1, ALEX_V2)
+        f"package://alex_{version}_description/": _alex_description_dir(version) + "/" for version in (ALEX_V1, ALEX_V2)
     }
     replacements["package://abilityHand/"] = os.path.join(_ABILITY_HAND_MODELS_DIR, "meshes", "abilityHand") + "/"
     return replacements
@@ -133,6 +132,8 @@ def _resolve_ability_hand_models_dir(alex_models_dir: str) -> str:
     sdk_root = os.path.dirname(alex_models_dir)
     candidates = [
         os.path.join(sdk_root, "alex-ros2", "ihmc_hands_ros2"),
+        os.path.join(alex_models_dir, "ihmc_hands_ros2"),
+        os.path.join(sdk_root, "ihmc_hands_ros2"),
         "/ihmc_hands_ros2",
     ]
     for candidate in candidates:
@@ -324,7 +325,7 @@ def _resolve_mesh_paths(src_path: str, output_path: str, robot_version: str) -> 
             fn = el.get("filename", "")
             for pkg_prefix, abs_prefix in replacements.items():
                 if fn.startswith(pkg_prefix):
-                    el.set("filename", abs_prefix + fn[len(pkg_prefix):])
+                    el.set("filename", abs_prefix + fn[len(pkg_prefix) :])
                     break
 
     tree.write(output_path, xml_declaration=True, encoding="unicode")
@@ -593,9 +594,7 @@ _ABILITY_HAND_DEFAULT_JOINT_POS = {
     joint: (
         _ABILITY_HAND_Q2_OPEN_POS
         if joint.endswith("_q2") and "thumb" not in joint
-        else _ABILITY_HAND_THUMB_Q1_OPEN_POS
-        if joint.endswith("thumb_q1")
-        else 0.0
+        else _ABILITY_HAND_THUMB_Q1_OPEN_POS if joint.endswith("thumb_q1") else 0.0
     )
     for joint in ABILITY_HAND_JOINT_NAMES_LIST
 }
@@ -722,7 +721,7 @@ def _pack_ability_hand_teleop_block(left_hand: torch.Tensor, right_hand: torch.T
 
 def _unpack_ability_hand_gripper_actions(actions: torch.Tensor) -> dict[str, torch.Tensor]:
     """Split a teleop action tensor into per-hand mimic gripper vectors."""
-    hand_block = actions[..., ALEX_ABILITY_HAND_WRIST_ACTION_DIM :]
+    hand_block = actions[..., ALEX_ABILITY_HAND_WRIST_ACTION_DIM:]
     return {
         "left": hand_block[..., list(_ABILITY_HAND_LEFT_GRIPPER_TELEOP_INDICES)],
         "right": hand_block[..., list(_ABILITY_HAND_RIGHT_GRIPPER_TELEOP_INDICES)],
@@ -735,10 +734,9 @@ def build_alex_ability_hand_teleop_action_order() -> list[str]:
     Layout: [left_wrist(7), right_wrist(7), hand_joints(20)] = 34 total.
     """
     return (
-        ALEX_ABILITY_HAND_LEFT_EE_ACTION_KEYS
-        + ALEX_ABILITY_HAND_RIGHT_EE_ACTION_KEYS
-        + ABILITY_HAND_TELEOP_JOINT_ORDER
+        ALEX_ABILITY_HAND_LEFT_EE_ACTION_KEYS + ALEX_ABILITY_HAND_RIGHT_EE_ACTION_KEYS + ABILITY_HAND_TELEOP_JOINT_ORDER
     )
+
 
 def _merge_ability_hands_urdf(robot_version: str) -> str:
     """Assemble Alex with cycloidal forearms and Psyonic Ability Hands."""
@@ -842,9 +840,7 @@ ALEX_TELEOP_ARM_DAMPING = float(os.environ.get("ALEX_TELEOP_ARM_DAMPING", "100.0
 
 def _configure_teleop_arm_actuators(robot_cfg: ArticulationCfg, include_wrists: bool) -> None:
     joint_expr = (
-        [".*SHOULDER.*", ".*ELBOW.*", ".*WRIST.*", ".*GRIPPER.*"]
-        if include_wrists
-        else [".*SHOULDER.*", ".*ELBOW.*"]
+        [".*SHOULDER.*", ".*ELBOW.*", ".*WRIST.*", ".*GRIPPER.*"] if include_wrists else [".*SHOULDER.*", ".*ELBOW.*"]
     )
     robot_cfg.actuators["arms"] = ImplicitActuatorCfg(
         joint_names_expr=joint_expr,
@@ -1058,10 +1054,7 @@ def apply_alex_elbow_ik_targets(
     """
     import pinocchio as pin
 
-    from isaaclab_arena.teleop.captury.captury_skeleton import (
-        CapturyArmTrackingHints,
-        elbow_target_in_base_frame,
-    )
+    from isaaclab_arena.teleop.captury.captury_skeleton import CapturyArmTrackingHints, elbow_target_in_base_frame
 
     try:
         ik_term = env.action_manager.get_term(ik_term_name)
@@ -1214,9 +1207,7 @@ def clamp_ability_hand_close_fraction(action: torch.Tensor, fraction: float) -> 
     return action
 
 
-_ABILITY_HAND_IS_LEFT_JOINT = torch.tensor(
-    [name.startswith("left_") for name in ABILITY_HAND_TELEOP_JOINT_ORDER]
-)
+_ABILITY_HAND_IS_LEFT_JOINT = torch.tensor([name.startswith("left_") for name in ABILITY_HAND_TELEOP_JOINT_ORDER])
 
 
 def build_ability_hand_joint_action(
@@ -1538,12 +1529,8 @@ def sync_alex_zed_cameras(env: ManagerBasedEnv, env_ids: torch.Tensor) -> None:
         ("zed_left_cam", _ZED_LEFT_CAM_OFFSET),
         ("zed_right_cam", _ZED_RIGHT_CAM_OFFSET),
     ):
-        offset_pos = torch.tensor(offset.position_xyz, device=env.device, dtype=torch.float32).repeat(
-            len(env_ids), 1
-        )
-        offset_quat = torch.tensor(offset.rotation_xyzw, device=env.device, dtype=torch.float32).repeat(
-            len(env_ids), 1
-        )
+        offset_pos = torch.tensor(offset.position_xyz, device=env.device, dtype=torch.float32).repeat(len(env_ids), 1)
+        offset_quat = torch.tensor(offset.rotation_xyzw, device=env.device, dtype=torch.float32).repeat(len(env_ids), 1)
         cam_pos, cam_quat = PoseUtils.combine_frame_transforms(head_pos, head_quat, offset_pos, offset_quat)
         env.scene[cam_name].set_world_poses(cam_pos, cam_quat, env_ids, convention="opengl")
 
@@ -1698,7 +1685,9 @@ class AlexAbilityHandMimicEnv(AlexMimicEnv):
         right_hand_action = gripper_action_dict["right"]
 
         if action_noise_dict is not None:
-            target_left_eef_pos = target_left_eef_pos + action_noise_dict["left"] * torch.randn_like(target_left_eef_pos)
+            target_left_eef_pos = target_left_eef_pos + action_noise_dict["left"] * torch.randn_like(
+                target_left_eef_pos
+            )
             target_right_eef_pos = target_right_eef_pos + action_noise_dict["right"] * torch.randn_like(
                 target_right_eef_pos
             )
@@ -1708,6 +1697,8 @@ class AlexAbilityHandMimicEnv(AlexMimicEnv):
             target_right_eef_rot_quat = target_right_eef_rot_quat + action_noise_dict["right"] * torch.randn_like(
                 target_right_eef_rot_quat
             )
+            target_left_eef_rot_quat = torch.nn.functional.normalize(target_left_eef_rot_quat, dim=-1)
+            target_right_eef_rot_quat = torch.nn.functional.normalize(target_right_eef_rot_quat, dim=-1)
 
         hand_block = _pack_ability_hand_teleop_block(left_hand_action, right_hand_action)
         return torch.cat(
@@ -1910,9 +1901,9 @@ class AlexAbilityHandEmbodiment(AlexTeleopEmbodimentMixin, EmbodimentBase):
         Boosts grip friction so graspable objects do not slip out during teleop /
         datagen. Call at build time before the environment is constructed.
         """
-        assert self.event_config is not None and self.event_config is not MISSING, (
-            "event_config must be populated before calling `set_finger_contact_friction`."
-        )
+        assert (
+            self.event_config is not None and self.event_config is not MISSING
+        ), "event_config must be populated before calling `set_finger_contact_friction`."
         self.event_config.apply_high_friction_to_ability_hand_fingers = EventTerm(
             func=apply_high_friction_to_ability_hand_fingers,
             mode="prestartup",

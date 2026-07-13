@@ -13,7 +13,6 @@
 Script to add mimic annotations to demos to be used as source demos for mimic dataset generation.
 """
 
-
 import gymnasium as gym
 
 from isaaclab.app import AppLauncher
@@ -68,6 +67,8 @@ from isaaclab.envs.mdp.recorders.recorders_cfg import ActionStateRecorderManager
 from isaaclab.managers import RecorderTerm, RecorderTermCfg, TerminationTermCfg
 from isaaclab.utils import configclass
 from isaaclab.utils.datasets import EpisodeData, HDF5DatasetFileHandler
+
+from isaaclab_arena.utils.isaaclab_utils.manager_terms import bind_extracted_manager_term
 
 is_paused = False
 current_action_index = 0
@@ -198,6 +199,7 @@ def main():
 
     if not isinstance(env, ManagerBasedRLMimicEnv):
         raise ValueError("The environment should be derived from ManagerBasedRLMimicEnv")
+    success_term = bind_extracted_manager_term(success_term, env)
 
     if args_cli.auto:
         # check if the mimic API env.get_subtask_term_signals() is implemented

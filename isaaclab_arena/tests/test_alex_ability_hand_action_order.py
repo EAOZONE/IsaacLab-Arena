@@ -6,7 +6,9 @@
 """Unit tests for Alex Ability Hands teleop ↔ Pink IK action tensor layout."""
 
 
-def _simulate_tensor_reorderer_mapping(input_config: dict[str, list[str]], output_order: list[str]) -> list[tuple[str, int, int]]:
+def _simulate_tensor_reorderer_mapping(
+    input_config: dict[str, list[str]], output_order: list[str]
+) -> list[tuple[str, int, int]]:
     """Replicate TensorReorderer index mapping (see isaacteleop.retargeters.tensor_reorderer)."""
     mapping: list[tuple[str, int, int]] = []
     for target_idx, element_name in enumerate(output_order):
@@ -31,10 +33,7 @@ def test_ability_hand_action_dimensions():
 
 
 def test_pink_cfg_hand_joint_order_matches_teleop():
-    from isaaclab_arena.embodiments.alex.alex import (
-        ABILITY_HAND_TELEOP_JOINT_ORDER,
-        AlexAbilityHandActionsCfg,
-    )
+    from isaaclab_arena.embodiments.alex.alex import ABILITY_HAND_TELEOP_JOINT_ORDER, AlexAbilityHandActionsCfg
 
     cfg = AlexAbilityHandActionsCfg()
     assert cfg.upper_body_ik.hand_joint_names == ABILITY_HAND_TELEOP_JOINT_ORDER
@@ -43,11 +42,11 @@ def test_pink_cfg_hand_joint_order_matches_teleop():
 
 def test_teleop_output_order_matches_pink_slices():
     from isaaclab_arena.embodiments.alex.alex import (
+        ABILITY_HAND_TELEOP_JOINT_ORDER,
         ALEX_ABILITY_HAND_HAND_ACTION_DIM,
         ALEX_ABILITY_HAND_LEFT_EE_ACTION_KEYS,
         ALEX_ABILITY_HAND_RIGHT_EE_ACTION_KEYS,
         ALEX_ABILITY_HAND_WRIST_ACTION_DIM,
-        ABILITY_HAND_TELEOP_JOINT_ORDER,
         build_alex_ability_hand_teleop_action_order,
     )
 
@@ -66,9 +65,9 @@ def test_teleop_output_order_matches_pink_slices():
 
 def test_tensor_reorderer_maps_all_hand_joints():
     from isaaclab_arena.embodiments.alex.alex import (
+        ABILITY_HAND_TELEOP_JOINT_ORDER,
         ALEX_ABILITY_HAND_LEFT_EE_ACTION_KEYS,
         ALEX_ABILITY_HAND_RIGHT_EE_ACTION_KEYS,
-        ABILITY_HAND_TELEOP_JOINT_ORDER,
         ability_hand_full_joint_names,
         build_alex_ability_hand_teleop_action_order,
     )
@@ -123,7 +122,7 @@ def test_mimic_gripper_pack_unpack_roundtrip():
     assert packed.shape == (20,)
 
     actions = torch.zeros(ALEX_ABILITY_HAND_TOTAL_ACTION_DIM, dtype=torch.float32)
-    actions[ALEX_ABILITY_HAND_WRIST_ACTION_DIM :] = packed
+    actions[ALEX_ABILITY_HAND_WRIST_ACTION_DIM:] = packed
     unpacked = _unpack_ability_hand_gripper_actions(actions)
     assert torch.allclose(unpacked["left"], left)
     assert torch.allclose(unpacked["right"], right)
@@ -148,6 +147,26 @@ def test_ability_hand_mimic_env_action_dim():
         {"left": left_hand, "right": right_hand},
     )
     assert action.shape == (ALEX_ABILITY_HAND_TOTAL_ACTION_DIM,)
+
+
+def test_ability_hand_mimic_noise_preserves_unit_quaternions():
+    import torch
+
+    from isaaclab_arena.embodiments.alex.alex import ALEX_ABILITY_HAND_PER_HAND_GRIPPER_DIM, AlexAbilityHandMimicEnv
+
+    env = object.__new__(AlexAbilityHandMimicEnv)
+    env._is_closed = True
+    action = env.target_eef_pose_to_action(
+        {"left": torch.eye(4), "right": torch.eye(4)},
+        {
+            "left": torch.zeros(ALEX_ABILITY_HAND_PER_HAND_GRIPPER_DIM),
+            "right": torch.zeros(ALEX_ABILITY_HAND_PER_HAND_GRIPPER_DIM),
+        },
+        action_noise_dict={"left": 0.1, "right": 0.1},
+    )
+
+    assert torch.allclose(torch.linalg.norm(action[3:7]), torch.tensor(1.0), atol=1e-6)
+    assert torch.allclose(torch.linalg.norm(action[10:14]), torch.tensor(1.0), atol=1e-6)
 
 
 def test_joint_position_embodiment_action_layout():
@@ -180,10 +199,7 @@ def test_joint_position_embodiment_action_layout():
 
 
 def test_hand_joint_order_is_permutation_of_urdf_joint_list():
-    from isaaclab_arena.embodiments.alex.alex import (
-        ABILITY_HAND_JOINT_NAMES_LIST,
-        ABILITY_HAND_TELEOP_JOINT_ORDER,
-    )
+    from isaaclab_arena.embodiments.alex.alex import ABILITY_HAND_JOINT_NAMES_LIST, ABILITY_HAND_TELEOP_JOINT_ORDER
 
     assert sorted(ABILITY_HAND_TELEOP_JOINT_ORDER) == sorted(ABILITY_HAND_JOINT_NAMES_LIST)
     assert len(ABILITY_HAND_TELEOP_JOINT_ORDER) == len(set(ABILITY_HAND_TELEOP_JOINT_ORDER))

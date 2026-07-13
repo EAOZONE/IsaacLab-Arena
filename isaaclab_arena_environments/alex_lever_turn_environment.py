@@ -56,9 +56,7 @@ class AlexLeverTurnEnvironment(ExampleEnvironmentBase):
         if tuple(args_cli.usd_pos) == (0.6, 0.0, 0.9):
             usd_pos = lever_scene_builder.LEVER_USD_DEFAULT_POS
             usd_yaw = lever_scene_builder.LEVER_USD_DEFAULT_YAW if args_cli.usd_yaw == 0.0 else args_cli.usd_yaw
-            usd_scale = (
-                lever_scene_builder.LEVER_USD_DEFAULT_SCALE if args_cli.usd_scale == 1.0 else args_cli.usd_scale
-            )
+            usd_scale = lever_scene_builder.LEVER_USD_DEFAULT_SCALE if args_cli.usd_scale == 1.0 else args_cli.usd_scale
 
         lever_assets, lever_object = lever_scene_builder.build_lever_scene_assets(
             usd_path=args_cli.usd,
@@ -69,15 +67,13 @@ class AlexLeverTurnEnvironment(ExampleEnvironmentBase):
             table=args_cli.table,
         )
 
+        mimic_mode = bool(args_cli.mimic)
         embodiment = self.asset_registry.get_asset_by_name(args_cli.embodiment)(
-            concatenate_observation_terms=True,
-            # Stiff teleop PD (stiffness ~6000) + random Pink IK targets causes
-            # occasional joint-velocity spikes that dominate PPO's mean reward.
-            use_teleop_actuators=False,
-            # Absolute-pose Pink IK actions are unsafe for RL: a near-zero policy
-            # output is a degenerate/zero-norm quaternion, which crashes the IK
-            # solve on nearly every step. Use the bounded delta-pose action term.
-            use_rl_action_space=True,
+            concatenate_observation_terms=not mimic_mode,
+            # Mimic replays absolute wrist poses with the teleop gains. RL uses
+            # softer policy gains and bounded delta-pose actions.
+            use_teleop_actuators=mimic_mode,
+            use_rl_action_space=not mimic_mode,
         )
         half_yaw = math.radians(args_cli.spawn_yaw) / 2.0
         embodiment.set_initial_pose(

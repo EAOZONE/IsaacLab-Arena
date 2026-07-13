@@ -20,6 +20,7 @@ from isaaclab_arena.embodiments.common.arm_mode import ArmMode
 from isaaclab_arena.embodiments.embodiment_base import EmbodimentBase
 from isaaclab_arena.metrics.metric_base import MetricBase
 from isaaclab_arena.metrics.success_rate import SuccessRateMetric
+from isaaclab_arena.tasks.common.lever_turn_mimic import LeverTurnMimicEnvCfg, make_lever_turn_subtask_obs_cfg
 from isaaclab_arena.tasks.observations import observations
 from isaaclab_arena.tasks.rewards.lever_turn_rewards import (
     RIGHT_ABILITY_HAND_JOINT_NAMES,
@@ -82,7 +83,10 @@ class LeverTurnTaskRL(TaskBase):
         return self.events_cfg
 
     def get_mimic_env_cfg(self, arm_mode: ArmMode) -> Any:
-        raise NotImplementedError("Function not implemented yet.")
+        return LeverTurnMimicEnvCfg(arm_mode=arm_mode, lever_object_name=self.lever_object.name)
+
+    def get_mimic_subtask_obs_cfg(self) -> Any:
+        return make_lever_turn_subtask_obs_cfg(self.lever_object)
 
     def get_termination_cfg(self) -> Any:
         return self.termination_cfg

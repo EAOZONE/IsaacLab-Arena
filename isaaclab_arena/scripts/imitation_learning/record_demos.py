@@ -58,8 +58,10 @@ parser.add_argument(
     "--timed_episode_s",
     type=float,
     default=None,
-    help="Export each active recording as success after this many seconds, then auto-reset. "
-    "Bypasses task success checks; use for batch mocap collection with manual curation.",
+    help=(
+        "Export each active recording as success after this many seconds, then auto-reset. "
+        "Bypasses task success checks; use for batch mocap collection with manual curation."
+    ),
 )
 parser.add_argument(
     "--disable_full_sim_buffer_reset",
@@ -72,15 +74,19 @@ parser.add_argument(
     "--head_view",
     action="store_true",
     default=False,
-    help="Pin the Kit viewport camera at the robot's HEAD_LINK position (static, does not track the head) "
-    "looking at the task object, with a widened field of view. Useful as a first-person operator view.",
+    help=(
+        "Pin the Kit viewport camera at the robot's HEAD_LINK position (static, does not track the head) "
+        "looking at the task object, with a widened field of view. Useful as a first-person operator view."
+    ),
 )
 parser.add_argument(
     "--head_view_focal",
     type=float,
     default=12.0,
-    help="Focal length [mm] of the viewport camera when --head_view is set. Lower = wider FOV "
-    "(default 12.0; Kit default is ~18.15).",
+    help=(
+        "Focal length [mm] of the viewport camera when --head_view is set. Lower = wider FOV "
+        "(default 12.0; Kit default is ~18.15)."
+    ),
 )
 # Add the example environments CLI args
 # NOTE(alexmillane, 2025.09.04): This has to be added last, because
@@ -141,6 +147,7 @@ from isaaclab_arena.teleop.captury.captury_teleop_device import (
     create_captury_teleop_device,
 )
 from isaaclab_arena.utils.cameras import clear_rtx_camera_output_buffers
+from isaaclab_arena.utils.isaaclab_utils.manager_terms import bind_extracted_manager_term
 from isaaclab_arena.utils.isaaclab_utils.recorders import ArenaEnvRecorderManagerCfg
 
 # Imports have to follow simulation startup.
@@ -758,6 +765,7 @@ def main() -> None:
 
     # Create environment
     env = create_environment(env_cfg, env_name)
+    success_term = bind_extracted_manager_term(success_term, env)
 
     # Run simulation loop
     current_recorded_demo_count = run_simulation_loop(env, None, success_term, rate_limiter, embodiment)

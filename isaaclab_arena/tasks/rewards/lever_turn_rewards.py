@@ -3,9 +3,8 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-from collections.abc import Sequence
-
 import torch
+from collections.abc import Sequence
 
 import warp as wp
 from isaaclab.assets import Articulation, RigidObject
@@ -184,20 +183,54 @@ class LeverTurnSuccess(HingeAngleFromRest):
     def __init__(self, cfg: ManagerTermBaseCfg, env: ManagerBasedRLEnv):
         super().__init__(cfg, env)
         self._steps_above_threshold = torch.zeros(env.num_envs, dtype=torch.long, device=env.device)
+        self._last_processed_step = torch.full((env.num_envs,), -1, dtype=torch.long, device=env.device)
 
     def reset(self, env_ids: Sequence[int] | None = None) -> None:
         super().reset(env_ids)
         if env_ids is None:
             env_ids = slice(None)
         self._steps_above_threshold[env_ids] = 0
+        self._last_processed_step[env_ids] = -1
 
     def __call__(self, env: ManagerBasedRLEnv, object_cfg: SceneEntityCfg, angle_threshold: float) -> torch.Tensor:
         angle = super().__call__(env, object_cfg)
         above = angle > angle_threshold
-        self._steps_above_threshold = torch.where(
-            above, self._steps_above_threshold + 1, torch.zeros_like(self._steps_above_threshold)
+        episode_step = env.episode_length_buf
+        reset_ids = episode_step < self._last_processed_step
+        self._steps_above_threshold[reset_ids] = 0
+        new_step = episode_step != self._last_processed_step
+        self._steps_above_threshold[new_step] = torch.where(
+            above[new_step],
+            self._steps_above_threshold[new_step] + 1,
+            torch.zeros_like(self._steps_above_threshold[new_step]),
         )
+        self._last_processed_step = episode_step.clone()
         return self._steps_above_threshold >= self._DEBOUNCE_STEPS
+
+
+class LeverEngaged(HingeAngleFromRest):
+    """Monotonic per-episode signal that latches once the lever starts moving."""
+
+    def __init__(self, cfg: ManagerTermBaseCfg, env: ManagerBasedRLEnv):
+        super().__init__(cfg, env)
+        self._engaged = torch.zeros(env.num_envs, dtype=torch.bool, device=env.device)
+        self._last_episode_step = torch.full((env.num_envs,), -1, dtype=torch.long, device=env.device)
+
+    def reset(self, env_ids: Sequence[int] | None = None) -> None:
+        super().reset(env_ids)
+        if env_ids is None:
+            env_ids = slice(None)
+        self._engaged[env_ids] = False
+        self._last_episode_step[env_ids] = -1
+
+    def __call__(self, env: ManagerBasedRLEnv, object_cfg: SceneEntityCfg, angle_threshold: float) -> torch.Tensor:
+        angle = super().__call__(env, object_cfg)
+        episode_step = env.episode_length_buf
+        reset_ids = episode_step < self._last_episode_step
+        self._engaged[reset_ids] = False
+        self._engaged |= angle > angle_threshold
+        self._last_episode_step = episode_step.clone()
+        return self._engaged
 
 
 class LeverTurnedBonus(HingeAngleFromRest):
