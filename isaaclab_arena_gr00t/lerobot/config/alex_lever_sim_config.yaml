@@ -1,0 +1,68 @@
+# Copyright (c) 2025-2026, The Isaac Lab Arena Project Developers (https://github.com/isaac-sim/IsaacLab-Arena/blob/main/CONTRIBUTORS.md).
+# All rights reserved.
+#
+# SPDX-License-Identifier: Apache-2.0
+
+# Convert Captury lever teleop demos (alex_empty + Lever_revolute.usd) to LeRobot.
+#
+# Recorded by record_demos.py with --enable_cameras:
+#   state  = robot_joint_pos (49)
+#   action = raw Pink IK actions (34) = wrists14 + hands20
+#   videos = camera_obs/zed_{left,right}_cam_rgb
+#
+# Camera keys are renamed to the lever / test_obs_new convention (cam_zed_*) so
+# Hub datasets line up with leLab_for_alex training / rollout naming.
+#
+# Usage (Arena container)::
+#
+#   /isaac-sim/python.sh isaaclab_arena_gr00t/lerobot/convert_hdf5_to_lerobot.py \
+#     --yaml_file isaaclab_arena_gr00t/lerobot/config/alex_lever_sim_config.yaml
+#
+# Output: <data_root>/<hdf5_stem>/lerobot/
+#
+# Schema note: this is Arena teleop 49/34, not the real-robot / Isaac-Alex-Lever
+# Play 48/46 layout. See leLab_for_alex/docs/CAPTURY_TO_LEROBOT_TRAINING.md.
+
+data_root: "/datasets/alex_lever_sim"
+
+hdf5_name: "demo.hdf5"
+
+language_instruction: "Pull the lever."
+task_index: 0
+
+state_name_sim: "robot_joint_pos"
+action_name_sim: "actions"
+action_eef_pose_slice: [0, 14]
+action_joint_slice: [14, 34]
+action_pack_eef_pose: true
+
+# Rename sim camera streams to the lever Hub convention.
+video_cameras:
+  zed_left_cam_rgb: observation.images.cam_zed_left
+  zed_right_cam_rgb: observation.images.cam_zed_right
+
+state_name_lerobot: "observation.state"
+action_name_lerobot: "action"
+task_description_lerobot: "annotation.human.action.task_description"
+
+chunks_size: 1000
+fps: 30
+
+data_path: "data/chunk-{episode_chunk:03d}/episode_{episode_index:06d}.parquet"
+video_path: "videos/chunk-{episode_chunk:03d}/{video_key}/episode_{episode_index:06d}.mp4"
+
+modality_template_path: "isaaclab_arena_gr00t/embodiments/alex/modality.json"
+modality_fname: "modality.json"
+episodes_fname: "episodes.jsonl"
+tasks_fname: "tasks.jsonl"
+info_template_path: "isaaclab_arena_gr00t/embodiments/alex/info.json"
+info_fname: "info.json"
+
+policy_joints_config_path: "isaaclab_arena_gr00t/embodiments/alex/alex_gr00t_joint_space.yaml"
+robot_type: "alex_ability_hands"
+
+state_joints_config_path: "isaaclab_arena_gr00t/embodiments/alex/alex_49dof_joint_space.yaml"
+action_joints_config_path: "isaaclab_arena_gr00t/embodiments/alex/alex_20dof_hand_action_joint_space.yaml"
+
+original_image_size: [480, 640, 3]
+target_image_size: [480, 640, 3]

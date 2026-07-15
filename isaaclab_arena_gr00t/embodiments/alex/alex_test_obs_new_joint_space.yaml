@@ -1,0 +1,62 @@
+# Copyright (c) 2026, The Isaac Lab Arena Project Developers (https://github.com/isaac-sim/IsaacLab-Arena/blob/main/CONTRIBUTORS.md).
+# All rights reserved.
+#
+# SPDX-License-Identifier: Apache-2.0
+
+joints:
+  left_wrist_pose:
+    - left_wrist_pos_x
+    - left_wrist_pos_y
+    - left_wrist_pos_z
+    - left_wrist_quat_x
+    - left_wrist_quat_y
+    - left_wrist_quat_z
+    - left_wrist_quat_w
+  right_wrist_pose:
+    - right_wrist_pos_x
+    - right_wrist_pos_y
+    - right_wrist_pos_z
+    - right_wrist_quat_x
+    - right_wrist_quat_y
+    - right_wrist_quat_z
+    - right_wrist_quat_w
+  left_forearm:
+    - left_forearm_quat_x
+    - left_forearm_quat_y
+    - left_forearm_quat_z
+    - left_forearm_quat_w
+  right_forearm:
+    - right_forearm_quat_x
+    - right_forearm_quat_y
+    - right_forearm_quat_z
+    - right_forearm_quat_w
+  neck:
+    - neck_quat_x
+    - neck_quat_y
+    - neck_quat_z
+    - neck_quat_w
+  left_hand:
+    - left_ability_hand_index_q1
+    - left_ability_hand_index_q2
+    - left_ability_hand_middle_q1
+    - left_ability_hand_middle_q2
+    - left_ability_hand_ring_q1
+    - left_ability_hand_ring_q2
+    - left_ability_hand_pinky_q1
+    - left_ability_hand_pinky_q2
+    - left_ability_hand_thumb_q1
+    - left_ability_hand_thumb_q2
+  right_hand:
+    - right_ability_hand_index_q1
+    - right_ability_hand_index_q2
+    - right_ability_hand_middle_q1
+    - right_ability_hand_middle_q2
+    - right_ability_hand_ring_q1
+    - right_ability_hand_ring_q2
+    - right_ability_hand_pinky_q1
+    - right_ability_hand_pinky_q2
+    - right_ability_hand_thumb_q1
+    - right_ability_hand_thumb_q2
+  spine:
+    - spine_z
+    - spine_y

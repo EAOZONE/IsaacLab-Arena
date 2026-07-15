@@ -28,7 +28,9 @@ from isaaclab_arena_gr00t.utils.io_utils import (
     load_json,
     load_robot_joints_config_from_yaml,
 )
-from isaaclab_arena_gr00t.utils.joints_conversion import remap_sim_joints_to_policy_joints
+from isaaclab_arena_gr00t.utils.joints_conversion import (
+    remap_sim_joints_to_policy_joints,
+)
 from isaaclab_arena_gr00t.utils.robot_eef_pose import EefPose
 from isaaclab_arena_gr00t.utils.robot_joints import JointsAbsPosition
 
@@ -76,13 +78,20 @@ def _pack_eef_lerobot_action(
     policy_modality_config: dict[str, Any],
 ) -> list[np.ndarray]:
     """Pack HDF5 Pink IK ``actions`` into a 34-dim LeRobot action [wrists | fingers]."""
-    assert config.action_eef_pose_slice is not None and config.action_joint_slice is not None
+    assert (
+        config.action_eef_pose_slice is not None
+        and config.action_joint_slice is not None
+    )
     eef_start, eef_end = config.action_eef_pose_slice
     joint_start, joint_end = config.action_joint_slice
     eef_block = np.asarray(raw_actions[:, eef_start:eef_end], dtype=np.float64)
     finger_block = raw_actions[:, joint_start:joint_end]
-    finger_joints = JointsAbsPosition.from_array(finger_block, action_joints_config, device="cpu")
-    remapped_fingers = remap_sim_joints_to_policy_joints(finger_joints, {"hands": policy_joints_config["hands"]})
+    finger_joints = JointsAbsPosition.from_array(
+        finger_block, action_joints_config, device="cpu"
+    )
+    remapped_fingers = remap_sim_joints_to_policy_joints(
+        finger_joints, {"hands": policy_joints_config["hands"]}
+    )
 
     packed_parts: list[np.ndarray] = []
     for joint_group in policy_modality_config["action"].keys():
@@ -92,20 +101,28 @@ def _pack_eef_lerobot_action(
         elif joint_group in _NON_JOINT_MODALITY_GROUPS:
             continue
         else:
-            assert joint_group in remapped_fingers, f"missing remapped action group {joint_group}"
+            assert (
+                joint_group in remapped_fingers
+            ), f"missing remapped action group {joint_group}"
             packed_parts.append(remapped_fingers[joint_group])
 
     packed = np.concatenate(packed_parts, axis=1)
     expected_dim = sum(
-        policy_modality_config["action"][group]["end"] - policy_modality_config["action"][group]["start"]
+        policy_modality_config["action"][group]["end"]
+        - policy_modality_config["action"][group]["start"]
         for group in policy_modality_config["action"].keys()
         if group not in _NON_JOINT_MODALITY_GROUPS
     )
-    assert packed.shape == (raw_actions.shape[0], expected_dim), f"{packed.shape} != ({raw_actions.shape[0]}, {expected_dim})"
+    assert packed.shape == (
+        raw_actions.shape[0],
+        expected_dim,
+    ), f"{packed.shape} != ({raw_actions.shape[0]}, {expected_dim})"
     return [row for row in packed]
 
 
-def wait_for_video_completion(video_path: str, max_wait_time: int = 60, check_interval: float = 0.5) -> bool:
+def wait_for_video_completion(
+    video_path: str, max_wait_time: int = 60, check_interval: float = 0.5
+) -> bool:
     """
     Wait for a video file to be completely written and accessible.
 
@@ -246,7 +263,9 @@ def get_feature_info(
     Returns:
         Dictionary containing feature information for each column and video.
     """
-    policy_joints_config = load_robot_joints_config_from_yaml(config.policy_joints_config_path)
+    policy_joints_config = load_robot_joints_config_from_yaml(
+        config.policy_joints_config_path
+    )
     policy_modality_config = load_json(config.modality_template_path)
     features = {}
     for video_key, video_path in video_paths.items():
@@ -283,7 +302,9 @@ def get_feature_info(
     return features
 
 
-def extract_teleop_command(trajectory: h5py.Dataset, teleop_key: str, config: Gr00tDatasetConfig) -> dict[str, Any]:
+def extract_teleop_command(
+    trajectory: h5py.Dataset, teleop_key: str, config: Gr00tDatasetConfig
+) -> dict[str, Any]:
     """
     Extract the teleop command from the trajectory.
     """
@@ -340,7 +361,9 @@ def generate_info(
     return info_template
 
 
-def write_video_job(queue: mp.Queue, error_queue: mp.Queue, config: Gr00tDatasetConfig) -> None:
+def write_video_job(
+    queue: mp.Queue, error_queue: mp.Queue, config: Gr00tDatasetConfig
+) -> None:
     """
     Write frames to videos in mp4 format.
 
@@ -366,14 +389,19 @@ def write_video_job(queue: mp.Queue, error_queue: mp.Queue, config: Gr00tDataset
                 ), f"frames.shape[1:] {frames.shape[1:]} != config.original_image_size {config.original_image_size}"
                 if config.target_image_size != config.original_image_size:
                     frames = resize_frames_with_padding(
-                        frames, target_image_size=config.target_image_size, bgr_conversion=False, pad_img=True
+                        frames,
+                        target_image_size=config.target_image_size,
+                        bgr_conversion=False,
+                        pad_img=True,
                     )
                 # h264 codec encoding
                 torchvision.io.write_video(video_path, frames, fps, video_codec="h264")
 
         except Exception as e:
             # Get the traceback and put in error queue
-            error_msg = f"Error creating video {video_path}: {e}\n{traceback.format_exc()}"
+            error_msg = (
+                f"Error creating video {video_path}: {e}\n{traceback.format_exc()}"
+            )
             print(error_msg)
             error_queue.put(error_msg)
 
@@ -402,9 +430,31 @@ def convert_trajectory_to_df(
 
     policy_modality_config = load_json(config.modality_template_path)
 
-    policy_joints_config = load_robot_joints_config_from_yaml(config.policy_joints_config_path)
-    action_joints_config = load_robot_joints_config_from_yaml(config.action_joints_config_path)
-    state_joints_config = load_robot_joints_config_from_yaml(config.state_joints_config_path)
+    policy_joints_config = load_robot_joints_config_from_yaml(
+        config.policy_joints_config_path
+    )
+    action_joints_config = load_robot_joints_config_from_yaml(
+        config.action_joints_config_path
+    )
+    state_joints_config = load_robot_joints_config_from_yaml(
+        config.state_joints_config_path
+    )
+
+    def _read_hdf5_stream(key: str, hdf5_key_name: str):
+        if (
+            key == "state"
+            and "obs" in trajectory
+            and hdf5_key_name in trajectory["obs"]
+        ):
+            return trajectory["obs"][hdf5_key_name]
+        assert (
+            hdf5_key_name in trajectory.keys()
+        ), f"{hdf5_key_name!r} not found at episode root" + (
+            f" or obs group {list(trajectory['obs'].keys())}"
+            if "obs" in trajectory
+            else ""
+        )
+        return trajectory[hdf5_key_name]
 
     """Get joints state/action/timestamp from HDF5 file"""
     length = None
@@ -413,23 +463,26 @@ def convert_trajectory_to_df(
         if key not in ["state", "action"]:
             continue
         lerobot_key_name = config.lerobot_keys[key]
-        # state
-        if key == "state":
-            assert hdf5_key_name in trajectory["obs"].keys()
-            joints = trajectory["obs"][hdf5_key_name]
-        # action target
-        else:
-            assert hdf5_key_name in trajectory.keys()
-            joints = trajectory[hdf5_key_name]
+        joints = _read_hdf5_stream(key, hdf5_key_name)
         # state
         if key == "state":
             # NOTE(xinjieyao, 2025-09-25): remove the last obs due to Lab reports observations
             joints = joints[:-1]
+            if config.state_passthrough:
+                joints = np.asarray(joints, dtype=np.float32)
+                assert joints.ndim == 2
+                data[lerobot_key_name] = [row for row in joints]
+                continue
             input_joints_config = state_joints_config
         # action target
         elif key == "action":
             # NOTE(xinjieyao, 2025-09-25): remove the last idle action due to Lab reports actions
             joints = joints[:-1]
+            if config.action_passthrough:
+                joints = np.asarray(joints, dtype=np.float32)
+                assert joints.ndim == 2
+                data[lerobot_key_name] = [row for row in joints]
+                continue
             if (
                 config.action_pack_eef_pose
                 and config.action_eef_pose_slice is not None
@@ -459,16 +512,22 @@ def convert_trajectory_to_df(
         modality_policy_joints_config = _filter_policy_joints_config_for_modality(
             key, policy_joints_config, policy_modality_config
         )
-        remapped_joints = remap_sim_joints_to_policy_joints(joints, modality_policy_joints_config)
+        remapped_joints = remap_sim_joints_to_policy_joints(
+            joints, modality_policy_joints_config
+        )
 
         # 1.2. Fill in the missing joints with zeros
         ordered_joints = []
         for joint_group in policy_modality_config[key].keys():
             # EE wrist poses are packed separately; teleop command groups are not joints.
-            if joint_group in _EEF_WRIST_MODALITY_GROUPS or joint_group in _NON_JOINT_MODALITY_GROUPS:
+            if (
+                joint_group in _EEF_WRIST_MODALITY_GROUPS
+                or joint_group in _NON_JOINT_MODALITY_GROUPS
+            ):
                 continue
             num_joints = (
-                policy_modality_config[key][joint_group]["end"] - policy_modality_config[key][joint_group]["start"]
+                policy_modality_config[key][joint_group]["end"]
+                - policy_modality_config[key][joint_group]["start"]
             )
 
             if joint_group not in remapped_joints.keys():
@@ -483,7 +542,9 @@ def convert_trajectory_to_df(
         concatenated = np.concatenate(ordered_joints, axis=1)
         data[lerobot_key_name] = [row for row in concatenated]
 
-    assert len(data[config.lerobot_keys["action"]]) == len(data[config.lerobot_keys["state"]])
+    assert len(data[config.lerobot_keys["action"]]) == len(
+        data[config.lerobot_keys["state"]]
+    )
     length = len(data[config.lerobot_keys["action"]])
     data["timestamp"] = np.arange(length).astype(np.float64) * (1.0 / config.fps)
 
@@ -495,16 +556,25 @@ def convert_trajectory_to_df(
             continue
         eef_pose = {}
         for side in ["left", "right"]:
-            if f"{side}_eef_pos" in config.hdf5_keys and f"{side}_eef_quat" in config.hdf5_keys:
+            if (
+                f"{side}_eef_pos" in config.hdf5_keys
+                and f"{side}_eef_quat" in config.hdf5_keys
+            ):
                 side_eef_pos = trajectory[key][config.hdf5_keys[f"{side}_eef_pos"]]
                 side_eef_quat = trajectory[key][config.hdf5_keys[f"{side}_eef_quat"]]
-                side_eef_pose = EefPose.from_array(side_eef_pos[:-1], side_eef_quat[:-1], device="cpu")
+                side_eef_pose = EefPose.from_array(
+                    side_eef_pos[:-1], side_eef_quat[:-1], device="cpu"
+                )
                 eef_pose[side] = side_eef_pose.get_eef_pose()
         if "left" in eef_pose and "right" in eef_pose:
-            eef_pose = np.concatenate([eef_pose["left"].numpy(), eef_pose["right"].numpy()], axis=1).astype(np.float64)
+            eef_pose = np.concatenate(
+                [eef_pose["left"].numpy(), eef_pose["right"].numpy()], axis=1
+            ).astype(np.float64)
 
             assert eef_pose.shape == (length, 14), f"{eef_pose.shape} != ({length}, 14)"
-            assert f"{key}_eef_pose" in config.lerobot_keys, f"{key}_eef_pose not in config.lerobot_keys"
+            assert (
+                f"{key}_eef_pose" in config.lerobot_keys
+            ), f"{key}_eef_pose not in config.lerobot_keys"
             lerobot_key_name = config.lerobot_keys[f"{key}_eef_pose"]
             data[lerobot_key_name] = [row for row in eef_pose]
 
@@ -514,9 +584,16 @@ def convert_trajectory_to_df(
         start, end = config.action_eef_pose_slice
         # Raw Pink IK `actions` packs [left pos3+quat4, right pos3+quat4, ...]; columns
         # [start:end] are the bimanual wrist target poses (matches left/right_wrist_pose modality).
-        action_eef = np.asarray(trajectory[config.hdf5_keys["action"]][:-1, start:end], dtype=np.float64)
-        assert action_eef.shape == (length, end - start), f"{action_eef.shape} != ({length}, {end - start})"
-        assert "action_eef_pose" in config.lerobot_keys, "action_eef_pose lerobot key missing for action_eef_pose_slice"
+        action_eef = np.asarray(
+            trajectory[config.hdf5_keys["action"]][:-1, start:end], dtype=np.float64
+        )
+        assert action_eef.shape == (
+            length,
+            end - start,
+        ), f"{action_eef.shape} != ({length}, {end - start})"
+        assert (
+            "action_eef_pose" in config.lerobot_keys
+        ), "action_eef_pose lerobot key missing for action_eef_pose_slice"
         data[config.lerobot_keys["action_eef_pose"]] = [row for row in action_eef]
 
     """Get teleop command for action from HDF5 file(optional)"""
@@ -529,7 +606,9 @@ def convert_trajectory_to_df(
     for teleop_key in teleop_command_keys:
         if teleop_key in config.hdf5_keys:
             assert teleop_key in config.lerobot_keys
-            data[config.lerobot_keys[teleop_key]] = extract_teleop_command(trajectory, teleop_key, config)
+            data[config.lerobot_keys[teleop_key]] = extract_teleop_command(
+                trajectory, teleop_key, config
+            )
 
     # 2. Get the annotation
     assert "annotation" in config.lerobot_keys
@@ -607,7 +686,10 @@ def convert_hdf5_to_lerobot(config: Gr00tDatasetConfig):
             trajectory = hdf5_data[trajectory_id]
 
             df_ret_dict = convert_trajectory_to_df(
-                trajectory=trajectory, episode_index=episode_index, index_start=total_length, config=config
+                trajectory=trajectory,
+                episode_index=episode_index,
+                index_start=total_length,
+                config=config,
             )
         except Exception as e:
             print(f"Error loading trajectory {trajectory_id}: {e}")
@@ -616,7 +698,9 @@ def convert_hdf5_to_lerobot(config: Gr00tDatasetConfig):
         # 2.1. Save the episode data
         dataframe = df_ret_dict["data"]
         episode_chunk = episode_index // config.chunks_size
-        save_relpath = config.data_path.format(episode_chunk=episode_chunk, episode_index=episode_index)
+        save_relpath = config.data_path.format(
+            episode_chunk=episode_chunk, episode_index=episode_index
+        )
         save_path = config.lerobot_data_dir / save_relpath
         save_path.parent.mkdir(parents=True, exist_ok=True)
         dataframe.to_parquet(save_path)
@@ -624,23 +708,29 @@ def convert_hdf5_to_lerobot(config: Gr00tDatasetConfig):
         # 2.2. Update total length, episodes_info
         length = df_ret_dict["length"]
         total_length += length
-        episodes_info.append({
-            "episode_index": episode_index,
-            "tasks": [tasks[task_index] for task_index in df_ret_dict["annotation"]],
-            "length": length,
-        })
+        episodes_info.append(
+            {
+                "episode_index": episode_index,
+                "tasks": [
+                    tasks[task_index] for task_index in df_ret_dict["annotation"]
+                ],
+                "length": length,
+            }
+        )
         # 2.3. Generate videos/
         for sim_cam_name, lerobot_video_name in config.video_cameras.items():
             new_video_relpath = config.video_path.format(
-                episode_chunk=episode_chunk, video_key=lerobot_video_name, episode_index=episode_index
+                episode_chunk=episode_chunk,
+                video_key=lerobot_video_name,
+                episode_index=episode_index,
             )
             new_video_path = config.lerobot_data_dir / new_video_relpath
             if lerobot_video_name not in video_paths:
                 video_paths[lerobot_video_name] = new_video_path
 
-            assert sim_cam_name in trajectory["camera_obs"], (
-                f"Camera {sim_cam_name} not found in camera_obs {list(trajectory['camera_obs'].keys())}"
-            )
+            assert (
+                sim_cam_name in trajectory["camera_obs"]
+            ), f"Camera {sim_cam_name} not found in camera_obs {list(trajectory['camera_obs'].keys())}"
 
             frames = np.array(trajectory["camera_obs"][sim_cam_name])
             # remove last frame due to how Lab reports observations
@@ -654,7 +744,9 @@ def convert_hdf5_to_lerobot(config: Gr00tDatasetConfig):
     # 3. Generate the rest of meta/
     # 3.1. Generate tasks.json
     tasks_path = lerobot_meta_dir / config.tasks_fname
-    task_jsonlines = [{"task_index": task_index, "task": task} for task_index, task in tasks.items()]
+    task_jsonlines = [
+        {"task_index": task_index, "task": task} for task_index, task in tasks.items()
+    ]
     dump_jsonl(task_jsonlines, tasks_path)
 
     # 3.2. Generate episodes.jsonl
@@ -709,8 +801,12 @@ def convert_hdf5_to_lerobot(config: Gr00tDatasetConfig):
 if __name__ == "__main__":
     import argparse
 
-    parser = argparse.ArgumentParser(description="Convert Dataset from HDF5 to GR00T LeRobot Format")
-    parser.add_argument("--yaml_file", help="Path to YAML configuration file", required=True)
+    parser = argparse.ArgumentParser(
+        description="Convert Dataset from HDF5 to GR00T LeRobot Format"
+    )
+    parser.add_argument(
+        "--yaml_file", help="Path to YAML configuration file", required=True
+    )
     args = parser.parse_args()
 
     config = create_config_from_yaml(args.yaml_file, Gr00tDatasetConfig)

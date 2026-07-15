@@ -261,8 +261,15 @@ class CCILBCPolicy(PolicyBase):
         from isaaclab_arena_gr00t.embodiments.alex.alex_lever_eef_frame import convert_sim_eef_state_to_dataset
 
         policy_obs = observation["policy"]
-        left = torch.cat([policy_obs["left_eef_pos"], policy_obs["left_eef_quat"]], dim=1)
-        right = torch.cat([policy_obs["right_eef_pos"], policy_obs["right_eef_quat"]], dim=1)
+        if isinstance(policy_obs, torch.Tensor):
+            # Alex ability-hands concatenated policy layout:
+            # actions34 | robot_joint_pos49 | root_pos3 | root_quat4 |
+            # left_eef_pos3 | left_eef_quat4 | right_eef_pos3 | right_eef_quat4.
+            left = torch.cat([policy_obs[:, 90:93], policy_obs[:, 93:97]], dim=1)
+            right = torch.cat([policy_obs[:, 97:100], policy_obs[:, 100:104]], dim=1)
+        else:
+            left = torch.cat([policy_obs["left_eef_pos"], policy_obs["left_eef_quat"]], dim=1)
+            right = torch.cat([policy_obs["right_eef_pos"], policy_obs["right_eef_quat"]], dim=1)
         converted = convert_sim_eef_state_to_dataset(
             {
                 "left_wrist_pose": left.detach().cpu().numpy(),
@@ -279,9 +286,10 @@ class CCILBCPolicy(PolicyBase):
         self, env: gym.Env, observation: GymSpacesDict, raw_obs: torch.Tensor
     ) -> torch.Tensor:
         policy_obs = observation["policy"]
-        required = ["left_eef_pos", "left_eef_quat", "right_eef_pos", "right_eef_quat"]
-        for key in required:
-            assert key in policy_obs, f"test_obs_new state adapter requires observation['policy/{key}']"
+        if not isinstance(policy_obs, torch.Tensor):
+            required = ["left_eef_pos", "left_eef_quat", "right_eef_pos", "right_eef_quat"]
+            for key in required:
+                assert key in policy_obs, f"test_obs_new state adapter requires observation['policy/{key}']"
 
         left_hand_names = [
             "left_ability_hand_index_q1",
@@ -325,6 +333,8 @@ class CCILBCPolicy(PolicyBase):
         if self.state_adapter is None:
             return raw_obs
         assert self.state_adapter == "test_obs_new", f"Unknown CCIL state_adapter '{self.state_adapter}'"
+        if raw_obs.shape[1] == 48:
+            return raw_obs
         return self._adapt_test_obs_new_state(env, observation, raw_obs)
 
     def _stabilize_state(self, obs: torch.Tensor) -> torch.Tensor:
@@ -348,6 +358,15 @@ class CCILBCPolicy(PolicyBase):
         return action
 
     def _adapt_action_for_env(self, action: torch.Tensor, env: gym.Env) -> torch.Tensor:
+        action_manager = getattr(env.unwrapped, "action_manager", None)
+        if (
+            self.state_adapter == "test_obs_new"
+            and action.shape[1] == 46
+            and action_manager is not None
+            and getattr(action_manager, "action", None) is not None
+            and action_manager.action.shape[1] == 46
+        ):
+            return action
         action = self._adapt_action(action)
         if self.state_adapter == "test_obs_new" and action.shape[1] == 34:
             from isaaclab_arena_gr00t.embodiments.alex.alex_lever_eef_frame import convert_dataset_eef_action_to_sim
@@ -357,10 +376,23 @@ class CCILBCPolicy(PolicyBase):
         return action
 
     def get_action(self, env: gym.Env, observation: GymSpacesDict) -> torch.Tensor:
-        assert (
-            "policy" in observation and self.state_key in observation["policy"]
-        ), f"observation missing 'policy/{self.state_key}'"
-        raw_obs = observation["policy"][self.state_key].to(device=self.device, dtype=torch.float)
+        assert "policy" in observation, "observation missing 'policy'"
+        policy_obs = observation["policy"]
+        if isinstance(policy_obs, torch.Tensor):
+            if self.state_adapter == "test_obs_new":
+                if policy_obs.shape[1] == 48:
+                    raw_obs = policy_obs.to(device=self.device, dtype=torch.float)
+                else:
+                    assert policy_obs.shape[1] >= 83, (
+                        "test_obs_new adapter expected concatenated Alex policy observation with "
+                        f"at least 83 dims or native test_obs_new 48 dims, got {policy_obs.shape}"
+                    )
+                    raw_obs = policy_obs[:, 34:83].to(device=self.device, dtype=torch.float)
+            else:
+                raw_obs = policy_obs.to(device=self.device, dtype=torch.float)
+        else:
+            assert self.state_key in policy_obs, f"observation missing 'policy/{self.state_key}'"
+            raw_obs = policy_obs[self.state_key].to(device=self.device, dtype=torch.float)
         if self._video_source is not None and self.state_adapter == "test_obs_new":
             obs = torch.as_tensor(
                 self._video_source.read_state(num_envs=raw_obs.shape[0]),
