@@ -76,6 +76,34 @@ def pause_cb():
     is_paused = True
 
 
+def _merge_missing_scene_state(dataset_state: dict, scene_state: dict) -> dict:
+    """Fill scene asset groups missing from a recorded initial state.
+
+    Teleop HDF5s often store only ``articulation/robot``. Replaying into a richer
+    scene (e.g. ``alex_empty`` with a lever ``rigid_object``) would otherwise KeyError
+    inside ``InteractiveScene.reset_to``. Missing groups / assets fall back to the
+    live scene state so props stay at spawn while the robot resets from the demo.
+    """
+    merged: dict = {}
+    for group_name, group_assets in scene_state.items():
+        dataset_group = dataset_state.get(group_name)
+        if dataset_group is None:
+            merged[group_name] = group_assets
+            continue
+        merged_group: dict = {}
+        for asset_name, asset_state in group_assets.items():
+            merged_group[asset_name] = dataset_group.get(asset_name, asset_state)
+        # Keep any dataset-only assets (shouldn't happen, but don't drop them).
+        for asset_name, asset_state in dataset_group.items():
+            if asset_name not in merged_group:
+                merged_group[asset_name] = asset_state
+        merged[group_name] = merged_group
+    for group_name, group_assets in dataset_state.items():
+        if group_name not in merged:
+            merged[group_name] = group_assets
+    return merged
+
+
 def compare_states(state_from_dataset, runtime_state, runtime_env_index) -> (bool, str):
     """Compare states from dataset and runtime.
 
@@ -213,6 +241,8 @@ def main():
                             env_episode_data_map[env_id] = episode_data
                             # Set initial state for the new episode
                             initial_state = episode_data.get_initial_state()
+                            scene_state = env.scene.get_state(is_relative=True)
+                            initial_state = _merge_missing_scene_state(initial_state, scene_state)
                             env.reset_to(initial_state, torch.tensor([env_id], device=env.device), is_relative=True)
                             # Get the first action for the new episode
                             env_next_action = env_episode_data_map[env_id].get_next_action()

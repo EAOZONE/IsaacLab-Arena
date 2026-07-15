@@ -34,19 +34,33 @@ optional arguments:
 
 # Standard library imports
 import contextlib
+import math
 
 # Isaac Lab AppLauncher
 from isaaclab.app import AppLauncher
 
 from isaaclab_arena.cli.isaaclab_arena_cli import get_isaaclab_arena_cli_parser
-from isaaclab_arena_environments.cli import add_example_environments_cli_args, get_arena_builder_from_cli
+from isaaclab_arena_environments.cli import (
+    add_example_environments_cli_args,
+    get_arena_builder_from_cli,
+)
 
 # add argparse arguments
 parser = get_isaaclab_arena_cli_parser()
-parser.add_argument("--dataset_file", type=str, required=True, help="File path to export recorded demos.")
-parser.add_argument("--step_hz", type=int, default=30, help="Environment stepping rate in Hz.")
 parser.add_argument(
-    "--num_demos", type=int, default=1, help="Number of demonstrations to record. Set to 0 for infinite."
+    "--dataset_file",
+    type=str,
+    required=True,
+    help="File path to export recorded demos.",
+)
+parser.add_argument(
+    "--step_hz", type=int, default=30, help="Environment stepping rate in Hz."
+)
+parser.add_argument(
+    "--num_demos",
+    type=int,
+    default=1,
+    help="Number of demonstrations to record. Set to 0 for infinite.",
 )
 parser.add_argument(
     "--num_success_steps",
@@ -88,6 +102,20 @@ parser.add_argument(
         "(default 12.0; Kit default is ~18.15)."
     ),
 )
+parser.add_argument(
+    "--print_lever_angle_hz",
+    type=float,
+    default=5.0,
+    help="Print live lever Handle_1 angle at this rate for lever USD scenes. Set <= 0 to disable.",
+)
+parser.add_argument(
+    "--start_recording_immediately",
+    action="store_true",
+    help=(
+        "Start applying teleop actions immediately instead of waiting for the START callback. "
+        "Useful for OpenXR collection when tracking is active but the robot appears frozen."
+    ),
+)
 # Add the example environments CLI args
 # NOTE(alexmillane, 2025.09.04): This has to be added last, because
 # of the app specific flags being parsed after the global flags.
@@ -110,7 +138,9 @@ simulation_app = app_launcher.app
 # Patch isaaclab_physx's RTX render-update helper so the first frame's annotator
 # buffers are populated before the teleop loop renders. Without this the initial
 # pre-step render emerges black under the visualizer that record_demos.py uses.
-from isaaclab_arena.utils.isaaclab_utils.isaac_rtx_renderer_patch import patch_isaac_rtx_renderer
+from isaaclab_arena.utils.isaaclab_utils.isaac_rtx_renderer_patch import (
+    patch_isaac_rtx_renderer,
+)
 
 patch_isaac_rtx_renderer()
 
@@ -131,14 +161,26 @@ import isaaclab_tasks.manager_based.manipulation.pick_place  # noqa: F401
 # Omniverse logger
 import omni.log
 import omni.ui as ui
-from isaaclab.devices import Se3Keyboard, Se3KeyboardCfg, Se3SpaceMouse, Se3SpaceMouseCfg
+from isaaclab.devices import (
+    Se3Keyboard,
+    Se3KeyboardCfg,
+    Se3SpaceMouse,
+    Se3SpaceMouseCfg,
+)
 from isaaclab.devices.teleop_device_factory import create_teleop_device
 from isaaclab.envs import DirectRLEnvCfg, ManagerBasedRLEnvCfg
 from isaaclab.envs.mdp.recorders.recorders_cfg import ActionStateRecorderManagerCfg
 from isaaclab.envs.ui import EmptyWindow
 from isaaclab.managers import DatasetExportMode
-from isaaclab_mimic.ui.instruction_display import InstructionDisplay, show_subtask_instructions
-from isaaclab_teleop import IsaacTeleopCfg, create_isaac_teleop_device, remove_camera_configs
+from isaaclab_mimic.ui.instruction_display import (
+    InstructionDisplay,
+    show_subtask_instructions,
+)
+from isaaclab_teleop import (
+    IsaacTeleopCfg,
+    create_isaac_teleop_device,
+    remove_camera_configs,
+)
 
 from isaaclab_arena.teleop.captury.captury_teleop_device import (
     CapturyDeviceCfg,
@@ -147,8 +189,14 @@ from isaaclab_arena.teleop.captury.captury_teleop_device import (
     create_captury_teleop_device,
 )
 from isaaclab_arena.utils.cameras import clear_rtx_camera_output_buffers
-from isaaclab_arena.utils.isaaclab_utils.manager_terms import bind_extracted_manager_term
-from isaaclab_arena.utils.isaaclab_utils.recorders import ArenaEnvRecorderManagerCfg
+from isaaclab_arena.utils.isaaclab_utils.manager_terms import (
+    bind_extracted_manager_term,
+)
+from isaaclab_arena.utils.isaaclab_utils.recorders import (
+    ArenaEnvRecorderManagerCfg,
+    PreStepTestObsNewActionRecorderCfg,
+    PreStepTestObsNewStateRecorderCfg,
+)
 
 # Imports have to follow simulation startup.
 
@@ -268,6 +316,13 @@ def create_environment_config(
         env_cfg.num_rerenders_on_reset = 3
     else:
         env_cfg.recorders = ActionStateRecorderManagerCfg()
+    if getattr(args_cli, "embodiment", None) == "alex_v2_ability_hands":
+        env_cfg.recorders.record_pre_step_test_obs_new_state = (
+            PreStepTestObsNewStateRecorderCfg()
+        )
+        env_cfg.recorders.record_pre_step_test_obs_new_action = (
+            PreStepTestObsNewActionRecorderCfg()
+        )
     env_cfg.recorders.dataset_export_dir_path = output_dir
     env_cfg.recorders.dataset_filename = output_file_name
     env_cfg.recorders.dataset_export_mode = DatasetExportMode.EXPORT_SUCCEEDED_ONLY
@@ -275,7 +330,9 @@ def create_environment_config(
     return env_cfg, env_name, success_term, embodiment
 
 
-def create_environment(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg, env_name: str) -> gym.Env:
+def create_environment(
+    env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg, env_name: str
+) -> gym.Env:
     """Create the environment from the configuration.
 
     Args:
@@ -290,7 +347,9 @@ def create_environment(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg, env_name:
     """
     try:
         env = gym.make(env_name, cfg=env_cfg)
-        from isaaclab_arena.utils.isaaclab_utils.simulation_app import reapply_viewer_cfg
+        from isaaclab_arena.utils.isaaclab_utils.simulation_app import (
+            reapply_viewer_cfg,
+        )
 
         reapply_viewer_cfg(env)
         return env.unwrapped
@@ -310,7 +369,9 @@ def _apply_teleop_elbow_targets(embodiment, teleop_interface, env) -> None:
         return
     if not hasattr(teleop_interface, "get_elbow_directions_world"):
         return
-    embodiment.apply_teleop_elbow_targets(env, teleop_interface.get_elbow_directions_world())
+    embodiment.apply_teleop_elbow_targets(
+        env, teleop_interface.get_elbow_directions_world()
+    )
 
 
 def setup_teleop_device(callbacks: dict[str, Callable]) -> object:
@@ -331,29 +392,46 @@ def setup_teleop_device(callbacks: dict[str, Callable]) -> object:
     """
     teleop_interface = None
     try:
-        if hasattr(env_cfg, "isaac_teleop") and isinstance(env_cfg.isaac_teleop, CapturyDeviceCfg):
+        if hasattr(env_cfg, "isaac_teleop") and isinstance(
+            env_cfg.isaac_teleop, CapturyDeviceCfg
+        ):
             teleop_interface = create_captury_teleop_device(
                 env_cfg.isaac_teleop,
                 sim_device=env_cfg.sim.device,
                 callbacks=callbacks,
             )
-        elif hasattr(env_cfg, "isaac_teleop") and isinstance(env_cfg.isaac_teleop, IsaacTeleopCfg):
+        elif hasattr(env_cfg, "isaac_teleop") and isinstance(
+            env_cfg.isaac_teleop, IsaacTeleopCfg
+        ):
             teleop_interface = create_isaac_teleop_device(
                 env_cfg.isaac_teleop,
                 sim_device=env_cfg.sim.device,
                 callbacks=callbacks,
             )
-        elif hasattr(env_cfg, "teleop_devices") and args_cli.teleop_device in env_cfg.teleop_devices.devices:
-            teleop_interface = create_teleop_device(args_cli.teleop_device, env_cfg.teleop_devices.devices, callbacks)
+        elif (
+            hasattr(env_cfg, "teleop_devices")
+            and args_cli.teleop_device in env_cfg.teleop_devices.devices
+        ):
+            teleop_interface = create_teleop_device(
+                args_cli.teleop_device, env_cfg.teleop_devices.devices, callbacks
+            )
         else:
-            omni.log.warn(f"No teleop device '{args_cli.teleop_device}' found in environment config. Creating default.")
+            omni.log.warn(
+                f"No teleop device '{args_cli.teleop_device}' found in environment config. Creating default."
+            )
             if args_cli.teleop_device.lower() == "keyboard":
-                teleop_interface = Se3Keyboard(Se3KeyboardCfg(pos_sensitivity=0.2, rot_sensitivity=0.5))
+                teleop_interface = Se3Keyboard(
+                    Se3KeyboardCfg(pos_sensitivity=0.2, rot_sensitivity=0.5)
+                )
             elif args_cli.teleop_device.lower() == "spacemouse":
-                teleop_interface = Se3SpaceMouse(Se3SpaceMouseCfg(pos_sensitivity=0.2, rot_sensitivity=0.5))
+                teleop_interface = Se3SpaceMouse(
+                    Se3SpaceMouseCfg(pos_sensitivity=0.2, rot_sensitivity=0.5)
+                )
             else:
                 omni.log.error(f"Unsupported teleop device: {args_cli.teleop_device}")
-                omni.log.error("Supported devices: keyboard, spacemouse, avp_handtracking")
+                omni.log.error(
+                    "Supported devices: keyboard, spacemouse, avp_handtracking"
+                )
                 exit(1)
 
             # Add callbacks to fallback device
@@ -397,11 +475,59 @@ def setup_ui(label_text: str, env: gym.Env) -> InstructionDisplay:
 def export_episode_as_success(env: gym.Env) -> None:
     """Mark the current episode successful and write it to the dataset file."""
     env.recorder_manager.record_pre_reset([0], force_export_or_skip=False)
-    env.recorder_manager.set_success_to_episodes([0], torch.tensor([[True]], dtype=torch.bool, device=env.device))
+    env.recorder_manager.set_success_to_episodes(
+        [0], torch.tensor([[True]], dtype=torch.bool, device=env.device)
+    )
     env.recorder_manager.export_episodes([0])
 
 
-def process_success_condition(env: gym.Env, success_term: object | None, success_step_count: int) -> tuple[int, bool]:
+def _find_lever_object_name(env: gym.Env) -> str | None:
+    from isaaclab_arena_environments.lever_scene_builder import LEVER_USD_STEMS
+
+    scene_keys = set(env.scene.keys())
+    for stem in LEVER_USD_STEMS:
+        key = stem.replace("(", "_").replace(")", "_")
+        if key in scene_keys:
+            return key
+    return None
+
+
+def _lever_handle_quat_xyzw(env: gym.Env, object_name: str) -> torch.Tensor:
+    from isaacsim.core.prims import RigidPrim
+
+    from isaaclab_arena_environments.lever_scene_builder import (
+        LEVER_HANDLE_RIGID_BODY_SUFFIX,
+    )
+
+    prim_path = f"/World/envs/env_0/{object_name}{LEVER_HANDLE_RIGID_BODY_SUFFIX}"
+    _, quat_wxyz = RigidPrim(prim_path).get_world_poses()
+    return quat_wxyz[0][[1, 2, 3, 0]].to(device=env.device)
+
+
+def _set_lever_success_rest_quat(
+    env: gym.Env, object_name: str, rest_quat_xyzw: torch.Tensor
+) -> None:
+    """Update the reset-relative lever success cache used by the termination term."""
+    base_env = env.unwrapped if hasattr(env, "unwrapped") else env
+    if not hasattr(base_env, "_lever_rest_quat_by_object"):
+        base_env._lever_rest_quat_by_object = {}
+    rest_quats = rest_quat_xyzw.detach().clone().reshape(1, 4).repeat(
+        base_env.num_envs, 1
+    )
+    base_env._lever_rest_quat_by_object[object_name] = rest_quats.to(
+        device=base_env.device
+    )
+
+
+def _quat_angle_deg(quat_xyzw: torch.Tensor, rest_quat_xyzw: torch.Tensor) -> float:
+    dot = torch.abs(torch.dot(quat_xyzw, rest_quat_xyzw))
+    dot = torch.clamp(dot, -1.0, 1.0)
+    return math.degrees(float(2.0 * torch.acos(dot)))
+
+
+def process_success_condition(
+    env: gym.Env, success_term: object | None, success_step_count: int
+) -> tuple[int, bool]:
     """Process the success condition for the current step.
 
     Checks if the environment has met the success condition for the required
@@ -442,7 +568,10 @@ def reset_sim_context_buffers(env: gym.Env) -> None:
 
 
 def handle_reset(
-    env: gym.Env, success_step_count: int, instruction_display: InstructionDisplay, label_text: str
+    env: gym.Env,
+    success_step_count: int,
+    instruction_display: InstructionDisplay,
+    label_text: str,
 ) -> int:
     """Handle resetting the environment.
 
@@ -486,7 +615,9 @@ def apply_head_view(env: gym.Env, focal_length_mm: float) -> None:
     import warp as wp
 
     if "robot" not in env.scene.articulations:
-        omni.log.warn("--head_view: no 'robot' articulation in scene; skipping head view.")
+        omni.log.warn(
+            "--head_view: no 'robot' articulation in scene; skipping head view."
+        )
         return
     robot = env.scene["robot"]
     head_body_ids, _ = robot.find_bodies(["HEAD_LINK"])
@@ -515,9 +646,13 @@ def apply_head_view(env: gym.Env, focal_length_mm: float) -> None:
     focal_attr = cam_prim.GetAttribute("focalLength")
     if focal_attr.IsValid():
         focal_attr.Set(float(focal_length_mm))
-        print(f"--head_view: viewport at HEAD_LINK {tuple(round(v, 3) for v in eye)}, focal {focal_length_mm} mm")
+        print(
+            f"--head_view: viewport at HEAD_LINK {tuple(round(v, 3) for v in eye)}, focal {focal_length_mm} mm"
+        )
     else:
-        omni.log.warn(f"--head_view: no focalLength attribute on {cam_path}; FOV unchanged.")
+        omni.log.warn(
+            f"--head_view: no focalLength attribute on {cam_path}; FOV unchanged."
+        )
 
 
 def run_simulation_loop(
@@ -545,9 +680,13 @@ def run_simulation_loop(
     current_recorded_demo_count = 0
     success_step_count = 0
     should_reset_recording_instance = False
-    running_recording_instance = not args_cli.xr
+    running_recording_instance = (not args_cli.xr) or args_cli.start_recording_immediately
     episode_recording_start_time: float | None = None
     timed_episode_s = args_cli.timed_episode_s
+    lever_object_name: str | None = None
+    lever_rest_quat: torch.Tensor | None = None
+    last_lever_angle_print_time = 0.0
+    last_waiting_for_teleop_action_print_time = 0.0
 
     # Callback closures for the teleop device
     def reset_recording_instance():
@@ -586,7 +725,9 @@ def run_simulation_loop(
     teleop_interface.add_callback("R", reset_recording_instance)
     # Devices built on the IsaacTeleop pipeline stack (OpenXR, Captury) are
     # context managers and must be entered before advance().
-    use_isaac_teleop = hasattr(teleop_interface, "__enter__") and hasattr(teleop_interface, "__exit__")
+    use_isaac_teleop = hasattr(teleop_interface, "__enter__") and hasattr(
+        teleop_interface, "__exit__"
+    )
 
     label_text = f"Recorded {current_recorded_demo_count} successful demonstrations."
     instruction_display = setup_ui(label_text, env)
@@ -595,6 +736,8 @@ def run_simulation_loop(
         """Inner loop function with access to nonlocal variables."""
         nonlocal current_recorded_demo_count, success_step_count, should_reset_recording_instance
         nonlocal running_recording_instance, label_text, episode_recording_start_time
+        nonlocal lever_object_name, lever_rest_quat, last_lever_angle_print_time
+        nonlocal last_waiting_for_teleop_action_print_time
 
         def maybe_finish_timed_episode() -> None:
             nonlocal should_reset_recording_instance
@@ -605,25 +748,43 @@ def run_simulation_loop(
                 and time.time() - episode_recording_start_time >= timed_episode_s
             ):
                 export_episode_as_success(env)
-                print(f"Timed episode complete ({timed_episode_s:g}s). Exporting and resetting.")
+                print(
+                    f"Timed episode complete ({timed_episode_s:g}s). Exporting and resetting."
+                )
                 should_reset_recording_instance = True
 
         def perform_episode_reset() -> None:
             nonlocal success_step_count, should_reset_recording_instance, episode_recording_start_time
-            success_step_count = handle_reset(env, success_step_count, instruction_display, label_text)
+            nonlocal lever_rest_quat, last_lever_angle_print_time
+            success_step_count = handle_reset(
+                env, success_step_count, instruction_display, label_text
+            )
             teleop_interface.reset()
-            if embodiment is not None and hasattr(embodiment, "reset_teleop_action_warmup"):
+            if embodiment is not None and hasattr(
+                embodiment, "reset_teleop_action_warmup"
+            ):
                 embodiment.reset_teleop_action_warmup()
+            if lever_object_name is not None:
+                lever_rest_quat = _lever_handle_quat_xyzw(env, lever_object_name)
+                last_lever_angle_print_time = 0.0
             if running_recording_instance:
                 episode_recording_start_time = time.time()
             else:
                 episode_recording_start_time = None
             should_reset_recording_instance = False
+            if lever_object_name is not None and lever_rest_quat is not None:
+                _set_lever_success_rest_quat(env, lever_object_name, lever_rest_quat)
 
         # Reset before starting
         reset_sim_context_buffers(env)
         env.reset()
         teleop_interface.reset()
+        lever_object_name = _find_lever_object_name(env)
+        if lever_object_name is not None:
+            lever_rest_quat = _lever_handle_quat_xyzw(env, lever_object_name)
+            _set_lever_success_rest_quat(env, lever_object_name, lever_rest_quat)
+        if lever_object_name is not None and args_cli.print_lever_angle_hz > 0:
+            print(f"Lever angle debug enabled for scene object '{lever_object_name}'.")
         if running_recording_instance:
             episode_recording_start_time = time.time()
 
@@ -634,7 +795,9 @@ def run_simulation_loop(
         subtasks = {}
         stack_name = "IsaacTeleop" if use_isaac_teleop else "native"
         if timed_episode_s is not None:
-            print(f"{stack_name} recording started (timed episodes: {timed_episode_s:g}s, forced success).")
+            print(
+                f"{stack_name} recording started (timed episodes: {timed_episode_s:g}s, forced success)."
+            )
         else:
             print(f"{stack_name} recording started.")
 
@@ -642,17 +805,27 @@ def run_simulation_loop(
             while simulation_app.is_running():
                 # Get teleop command (may be None while waiting for session start)
                 if isinstance(teleop_interface, CapturyTeleopDevice):
-                    action = advance_captury_with_env_anchor(teleop_interface, env, embodiment)
+                    action = advance_captury_with_env_anchor(
+                        teleop_interface, env, embodiment
+                    )
                 else:
                     action = teleop_interface.advance()
                 if action is None:
+                    now = time.time()
+                    if now - last_waiting_for_teleop_action_print_time >= 2.0:
+                        print(
+                            "Waiting for IsaacTeleop action. In Kit/XR, click Start AR and send the START teleop command."
+                        )
+                        last_waiting_for_teleop_action_print_time = now
                     maybe_finish_timed_episode()
                     env.sim.render()
                     if should_reset_recording_instance:
                         perform_episode_reset()
                     continue
                 if not torch.isfinite(action).all():
-                    omni.log.warn("Skipping teleop step: non-finite action from IsaacTeleop.")
+                    omni.log.warn(
+                        "Skipping teleop step: non-finite action from IsaacTeleop."
+                    )
                     env.sim.render()
                     continue
                 if (
@@ -670,11 +843,29 @@ def run_simulation_loop(
                 if running_recording_instance:
                     # Compute actions based on environment
                     obv = env.step(actions)
+                    if (
+                        lever_object_name is not None
+                        and lever_rest_quat is not None
+                        and args_cli.print_lever_angle_hz > 0
+                    ):
+                        now = time.time()
+                        if (
+                            now - last_lever_angle_print_time
+                            >= 1.0 / args_cli.print_lever_angle_hz
+                        ):
+                            angle_deg = _quat_angle_deg(
+                                _lever_handle_quat_xyzw(env, lever_object_name),
+                                lever_rest_quat,
+                            )
+                            print(f"lever_angle_deg={angle_deg:.2f}")
+                            last_lever_angle_print_time = now
                     if subtasks is not None:
                         if subtasks == {}:
                             subtasks = obv[0].get("subtask_terms")
                         elif subtasks:
-                            show_subtask_instructions(instruction_display, subtasks, obv, env.cfg)
+                            show_subtask_instructions(
+                                instruction_display, subtasks, obv, env.cfg
+                            )
                 else:
                     env.sim.render()
 
@@ -682,23 +873,29 @@ def run_simulation_loop(
                 maybe_finish_timed_episode()
                 if timed_episode_s is None:
                     # Check for task success condition
-                    success_step_count_new, success_reset_needed = process_success_condition(
-                        env, success_term, success_step_count
+                    success_step_count_new, success_reset_needed = (
+                        process_success_condition(env, success_term, success_step_count)
                     )
                     success_step_count = success_step_count_new
                     if success_reset_needed:
                         should_reset_recording_instance = True
 
                 # Update demo count if it has changed
-                if env.recorder_manager.exported_successful_episode_count > current_recorded_demo_count:
-                    current_recorded_demo_count = env.recorder_manager.exported_successful_episode_count
+                if (
+                    env.recorder_manager.exported_successful_episode_count
+                    > current_recorded_demo_count
+                ):
+                    current_recorded_demo_count = (
+                        env.recorder_manager.exported_successful_episode_count
+                    )
                     label_text = f"Recorded {current_recorded_demo_count} successful demonstrations."
                     print(label_text)
 
                 # Check if we've reached the desired number of demos
                 if (
                     args_cli.num_demos > 0
-                    and env.recorder_manager.exported_successful_episode_count >= args_cli.num_demos
+                    and env.recorder_manager.exported_successful_episode_count
+                    >= args_cli.num_demos
                 ):
                     label_text = f"All {current_recorded_demo_count} demonstrations recorded.\nExiting the app."
                     instruction_display.show_demo(label_text)
@@ -761,18 +958,24 @@ def main() -> None:
 
     # Create and configure environment
     global env_cfg  # Make env_cfg available to setup_teleop_device
-    env_cfg, env_name, success_term, embodiment = create_environment_config(output_dir, output_file_name)
+    env_cfg, env_name, success_term, embodiment = create_environment_config(
+        output_dir, output_file_name
+    )
 
     # Create environment
     env = create_environment(env_cfg, env_name)
     success_term = bind_extracted_manager_term(success_term, env)
 
     # Run simulation loop
-    current_recorded_demo_count = run_simulation_loop(env, None, success_term, rate_limiter, embodiment)
+    current_recorded_demo_count = run_simulation_loop(
+        env, None, success_term, rate_limiter, embodiment
+    )
 
     # Clean up
     env.close()
-    print(f"Recording session completed with {current_recorded_demo_count} successful demonstrations")
+    print(
+        f"Recording session completed with {current_recorded_demo_count} successful demonstrations"
+    )
     print(f"Demonstrations saved to: {args_cli.dataset_file}")
 
 

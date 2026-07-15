@@ -272,6 +272,33 @@ def main():
     env.close()
 
 
+def _merge_missing_scene_state(dataset_state: dict, scene_state: dict) -> dict:
+    """Fill scene asset groups missing from a recorded initial state.
+
+    Teleop HDF5s often store only ``articulation/robot``. Annotating into a richer
+    Mimic scene (e.g. ``alex_lever_turn`` with a lever ``rigid_object``) would otherwise
+    KeyError inside ``InteractiveScene.reset_to``. Missing groups / assets fall back
+    to the live scene state so props stay at spawn while the robot resets from the demo.
+    """
+    merged: dict = {}
+    for group_name, group_assets in scene_state.items():
+        dataset_group = dataset_state.get(group_name)
+        if dataset_group is None:
+            merged[group_name] = group_assets
+            continue
+        merged_group: dict = {}
+        for asset_name, asset_state in group_assets.items():
+            merged_group[asset_name] = dataset_group.get(asset_name, asset_state)
+        for asset_name, asset_state in dataset_group.items():
+            if asset_name not in merged_group:
+                merged_group[asset_name] = asset_state
+        merged[group_name] = merged_group
+    for group_name, group_assets in dataset_state.items():
+        if group_name not in merged:
+            merged[group_name] = group_assets
+    return merged
+
+
 def replay_episode(
     env: ManagerBasedRLMimicEnv,
     episode: EpisodeData,
@@ -293,10 +320,12 @@ def replay_episode(
     """
     global current_action_index, skip_episode, is_paused
     # read initial state and actions from the loaded episode
-    initial_state = episode.data["initial_state"]
+    initial_state = episode.get_initial_state() if hasattr(episode, "get_initial_state") else episode.data["initial_state"]
     actions = episode.data["actions"]
     env.sim.reset()
     env.recorder_manager.reset()
+    scene_state = env.scene.get_state(is_relative=True)
+    initial_state = _merge_missing_scene_state(initial_state, scene_state)
     env.reset_to(initial_state, None, is_relative=True)
     first_action = True
     for action_index, action in enumerate(actions):

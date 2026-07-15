@@ -2,6 +2,7 @@
 # All rights reserved.
 #
 # SPDX-License-Identifier: Apache-2.0
+# ruff: noqa: E402
 
 # Copyright (c) 2024-2025, The Isaac Lab Project Developers (https://github.com/isaac-sim/IsaacLab/blob/main/CONTRIBUTORS.md).
 # All rights reserved.
@@ -16,19 +17,33 @@ Main data generation script.
 
 """Launch Isaac Sim Simulator first."""
 
+import os
 from typing import Any
 
 from isaaclab.app import AppLauncher
 
 from isaaclab_arena.cli.isaaclab_arena_cli import get_isaaclab_arena_cli_parser
-from isaaclab_arena_environments.cli import add_example_environments_cli_args, get_arena_builder_from_cli
+from isaaclab_arena_environments.cli import (
+    add_example_environments_cli_args,
+    get_arena_builder_from_cli,
+)
 
 # add argparse arguments
 parser = get_isaaclab_arena_cli_parser()
 parser.add_argument(
-    "--generation_num_trials", type=int, help="Number of demos to be generated.", default=None, required=True
+    "--generation_num_trials",
+    type=int,
+    help="Number of demos to be generated.",
+    default=None,
+    required=True,
 )
-parser.add_argument("--input_file", type=str, default=None, required=True, help="File path to the source dataset file.")
+parser.add_argument(
+    "--input_file",
+    type=str,
+    default=None,
+    required=True,
+    help="File path to the source dataset file.",
+)
 parser.add_argument(
     "--output_file",
     type=str,
@@ -39,6 +54,15 @@ parser.add_argument(
     "--pause_subtask",
     action="store_true",
     help="pause after every subtask during generation for debugging - only useful with render flag",
+)
+parser.add_argument(
+    "--post_success_hold_steps",
+    type=int,
+    default=int(os.environ.get("ARENA_MIMIC_POST_SUCCESS_HOLD_STEPS", "0")),
+    help=(
+        "Number of additional environment steps to record after a Mimic trajectory succeeds. "
+        "The final generated action is repeated before the episode is exported."
+    ),
 )
 
 # Add the example environments CLI args
@@ -57,10 +81,10 @@ simulation_app = app_launcher.app
 
 import asyncio
 import gymnasium as gym
+import h5py
 import inspect
 import logging
 import numpy as np
-import os
 import random
 import torch
 
@@ -71,13 +95,56 @@ from isaaclab.envs.mdp.recorders.recorders_cfg import ActionStateRecorderManager
 from isaaclab.managers import DatasetExportMode
 from isaaclab_mimic.datagen.generation import env_loop, setup_async_generation
 from isaaclab_mimic.datagen.utils import setup_output_paths
+from isaaclab_mimic.datagen.data_generator import DataGenerator
 
 from isaaclab_arena.utils.cameras import clear_rtx_camera_output_buffers
-from isaaclab_arena.utils.isaaclab_utils.manager_terms import bind_extracted_manager_term
-from isaaclab_arena.utils.isaaclab_utils.recorders import ArenaEnvRecorderManagerCfg
+from isaaclab_arena.utils.isaaclab_utils.manager_terms import (
+    bind_extracted_manager_term,
+)
+from isaaclab_arena.utils.isaaclab_utils.recorders import (
+    ArenaEnvRecorderManagerCfg,
+    PreStepTestObsNewActionRecorderCfg,
+    PreStepTestObsNewStateRecorderCfg,
+)
 
 # start logger
 logger = logging.getLogger(__name__)
+
+_REQUIRED_MIMIC_ANNOTATION_PATHS = (
+    "obs/datagen_info/object_pose",
+    "obs/datagen_info/eef_pose",
+    "obs/datagen_info/target_eef_pose",
+    "obs/datagen_info/subtask_term_signals",
+)
+
+
+def validate_mimic_source_dataset(input_file: str) -> None:
+    """Fail early if the source HDF5 has no usable Mimic annotations."""
+    if not os.path.isfile(input_file):
+        raise FileNotFoundError(f"Input dataset does not exist: {input_file}")
+
+    with h5py.File(input_file, "r") as dataset:
+        if "data" not in dataset:
+            raise RuntimeError(f"{input_file} is missing its top-level 'data' group")
+        demo_names = sorted(name for name in dataset["data"] if name.startswith("demo_"))
+        if not demo_names:
+            raise RuntimeError(
+                f"{input_file} contains 0 episodes. Re-run annotate_demos.py and make sure it prints "
+                "'Exported ... annotated episode' before running generation."
+            )
+
+        missing_by_demo = {}
+        for demo_name in demo_names:
+            demo = dataset["data"][demo_name]
+            missing = [path for path in _REQUIRED_MIMIC_ANNOTATION_PATHS if path not in demo]
+            if missing:
+                missing_by_demo[demo_name] = missing
+        if missing_by_demo:
+            first_demo, missing = next(iter(missing_by_demo.items()))
+            raise RuntimeError(
+                f"{input_file} is not a Mimic-annotated source dataset. "
+                f"{first_demo} is missing {missing}. Re-run annotate_demos.py first."
+            )
 
 
 def setup_env_config(
@@ -120,7 +187,9 @@ def setup_env_config(
         success_term = env_cfg.terminations.success
         env_cfg.terminations.success = None
     else:
-        raise NotImplementedError("No success termination term was found in the environment.")
+        raise NotImplementedError(
+            "No success termination term was found in the environment."
+        )
 
     # Configure for data generation
     env_cfg.terminations = None
@@ -139,6 +208,14 @@ def setup_env_config(
     else:
         env_cfg.recorders = env_cfg.mimic_recorder_config
 
+    if getattr(args_cli, "embodiment", None) == "alex_v2_ability_hands":
+        env_cfg.recorders.record_pre_step_test_obs_new_state = (
+            PreStepTestObsNewStateRecorderCfg()
+        )
+        env_cfg.recorders.record_pre_step_test_obs_new_action = (
+            PreStepTestObsNewActionRecorderCfg()
+        )
+
     if args_cli.enable_cameras and env_cfg.mimic_recorder_config is not None:
         env_cfg.num_rerenders_on_reset = max(env_cfg.num_rerenders_on_reset, 3)
         env_cfg.wait_for_textures = True
@@ -148,7 +225,9 @@ def setup_env_config(
     env_cfg.recorders.dataset_filename = output_file_name
 
     if env_cfg.datagen_config.generation_keep_failed:
-        env_cfg.recorders.dataset_export_mode = DatasetExportMode.EXPORT_SUCCEEDED_FAILED_IN_SEPARATE_FILES
+        env_cfg.recorders.dataset_export_mode = (
+            DatasetExportMode.EXPORT_SUCCEEDED_FAILED_IN_SEPARATE_FILES
+        )
     else:
         env_cfg.recorders.dataset_export_mode = DatasetExportMode.EXPORT_SUCCEEDED_ONLY
 
@@ -162,8 +241,66 @@ def reset_with_camera_warmup(env: ManagerBasedRLMimicEnv) -> None:
     env.reset()
 
 
+def install_post_success_hold_patch(hold_steps: int) -> None:
+    """Repeat the final Mimic action for extra recorded steps before exporting."""
+    if hold_steps <= 0:
+        return
+
+    original_generate = DataGenerator.generate
+
+    async def generate_with_post_success_hold(self, *args, **kwargs):
+        kwargs["export_demo"] = False
+        results = await original_generate(self, *args, **kwargs)
+
+        if not bool(results.get("success", False)):
+            return results
+
+        env_id = kwargs.get("env_id")
+        if env_id is None and args:
+            env_id = args[0]
+        if env_id is None:
+            raise ValueError("Could not resolve env_id for post-success hold.")
+
+        success_term = kwargs.get("success_term")
+        if success_term is None and len(args) > 1:
+            success_term = args[1]
+        if success_term is None:
+            raise ValueError("Could not resolve success_term for post-success hold.")
+
+        env_action_queue = kwargs.get("env_action_queue")
+        if env_action_queue is None and len(args) > 3:
+            env_action_queue = args[3]
+
+        actions = results.get("actions")
+        if actions is None or len(actions) == 0:
+            return results
+
+        env_id_tensor = torch.tensor(
+            [env_id], dtype=torch.int64, device=self.env.device
+        )
+        last_action = actions[-1].to(device=self.env.device)
+        for _ in range(hold_steps):
+            if env_action_queue is None:
+                self.env.step(last_action.unsqueeze(0))
+            else:
+                await env_action_queue.put((env_id, last_action))
+                await env_action_queue.join()
+            success_term.func(self.env, **success_term.params)
+
+        self.env.recorder_manager.set_success_to_episodes(
+            env_id_tensor,
+            torch.tensor([[True]], dtype=torch.bool, device=self.env.device),
+        )
+        self.env.recorder_manager.export_episodes(env_id_tensor)
+        return results
+
+    DataGenerator.generate = generate_with_post_success_hold
+
+
 def main():
     num_envs = args_cli.num_envs
+    install_post_success_hold_patch(args_cli.post_success_hold_steps)
+    validate_mimic_source_dataset(args_cli.input_file)
 
     # Setup output paths and get env name
     output_dir, output_file_name = setup_output_paths(args_cli.output_file)
@@ -186,11 +323,16 @@ def main():
     env = env.unwrapped
 
     if not isinstance(env, ManagerBasedRLMimicEnv):
-        raise ValueError("The environment should be derived from ManagerBasedRLMimicEnv")
+        raise ValueError(
+            "The environment should be derived from ManagerBasedRLMimicEnv"
+        )
     success_term = bind_extracted_manager_term(success_term, env)
 
     # check if the mimic API from this environment contains decprecated signatures
-    if "action_noise_dict" not in inspect.signature(env.target_eef_pose_to_action).parameters:
+    if (
+        "action_noise_dict"
+        not in inspect.signature(env.target_eef_pose_to_action).parameters
+    ):
         logger.warning(
             f'The "noise" parameter in the "{env_name}" environment\'s mimic API "target_eef_pose_to_action", '
             "is deprecated. Please update the API to take action_noise_dict instead."
@@ -219,7 +361,9 @@ def main():
         )
 
         try:
-            data_gen_tasks = asyncio.ensure_future(asyncio.gather(*async_components["tasks"]))
+            data_gen_tasks = asyncio.ensure_future(
+                asyncio.gather(*async_components["tasks"])
+            )
             env_loop(
                 env,
                 async_components["reset_queue"],

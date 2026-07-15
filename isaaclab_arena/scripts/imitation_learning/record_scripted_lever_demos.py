@@ -56,6 +56,8 @@ Run inside the container::
 
 """Launch Isaac Sim Simulator first."""
 
+from pathlib import Path
+
 from isaaclab.app import AppLauncher
 
 from isaaclab_arena.cli.isaaclab_arena_cli import get_isaaclab_arena_cli_parser
@@ -73,9 +75,9 @@ parser.add_argument("--num_demos", type=int, default=1, help="Number of demonstr
 parser.add_argument(
     "--object_name",
     type=str,
-    default="lever_revolute",
+    default=None,
     help=(
-        "Scene key of the lever rigid object to reach for (default matches alex_empty's Lever_revolute.usd asset name)."
+        "Scene key of the lever object to reach for. Defaults to the --usd filename stem, normalized like the scene key."
     ),
 )
 parser.add_argument(
@@ -213,6 +215,8 @@ parser.add_argument(
 add_example_environments_cli_args(parser)
 
 args_cli = parser.parse_args()
+if args_cli.object_name is None:
+    args_cli.object_name = Path(args_cli.usd).stem.lower().replace("(", "_").replace(")", "_")
 
 app_launcher = AppLauncher(args_cli)
 simulation_app = app_launcher.app
@@ -360,13 +364,7 @@ def _object_pose(env, object_name: str) -> tuple[torch.Tensor, torch.Tensor]:
         f"'{object_name}' not found in the scene (available: {list(env.scene.keys())}). Pass --object_name to match"
         " the --usd asset's prim name."
     )
-    data = getattr(env.scene[object_name], "data", None)
-    if data is None or not hasattr(data, "root_pos_w"):
-        return _lever_handle_prim_pose(env, object_name)
-
-    pos = wp.to_torch(data.root_pos_w)[0] - env.scene.env_origins[0]
-    quat = wp.to_torch(data.root_quat_w)[0]
-    return pos.clone(), quat.clone()
+    return _lever_handle_prim_pose(env, object_name)
 
 
 def _build_lever_path(env, device: torch.device):
