@@ -34,11 +34,20 @@ from isaaclab_arena.utils.pose import Pose, PoseRange
 # re-tips an already-flat board. The handle's own rest-facing direction is controlled by the
 # RevoluteJoint's local frames inside the asset, not by any board-level spawn rotation -- see
 # Handle_1's RevoluteJoint localRot0/localRot1 in Lever_revolute.usd.
-LEVER_USD_STEMS = ("lever", "lever_revolute", "new_lever", "lever_again")
+LEVER_USD_STEMS = (
+    "lever",
+    "lever_revolute",
+    "new_lever",
+    "lever_again",
+    "another_lever",
+    "another_try_lever",
+)
 LEVER_USD_DEFAULT_POS = (-0.05062, -0.51385, 0.75167)
 LEVER_USD_DEFAULT_YAW = 180.0
 LEVER_USD_DEFAULT_SCALE = 0.0254
 LEVER_AGAIN_STEM = "lever_again"
+LEVER_ARTICULATION_STEMS = ("lever",)
+LEVER_BASE_OBJECT_STEMS = ("lever_again", "another_lever", "another_try_lever")
 
 # lever_dr (opt-in) reset-time pose jitter, on top of usd_yaw's nominal yaw.
 _LEVER_DR_XY_JITTER = 0.02  # +/- meters, x and y independently
@@ -76,6 +85,31 @@ _LEVER_TABLE_XY_OFFSET = (0.37025, 0.15521)
 _LEVER_TABLE_POS_Z = 0.0
 
 
+def _handle_rest_pose_in_asset(
+    usd_path: str,
+) -> tuple[tuple[float, float, float], tuple[float, float, float, float]]:
+    from pxr import Usd, UsdGeom
+
+    stage = Usd.Stage.Open(usd_path)
+    assert stage is not None, f"Could not open lever USD: {usd_path}"
+    handle_prim = stage.GetPrimAtPath("/World" + LEVER_HANDLE_RIGID_BODY_SUFFIX)
+    assert (
+        handle_prim.IsValid()
+    ), f"Lever handle prim not found in {usd_path}: /World{LEVER_HANDLE_RIGID_BODY_SUFFIX}"
+    transform = UsdGeom.Xformable(handle_prim).ComputeLocalToWorldTransform(
+        Usd.TimeCode.Default()
+    )
+    pos = transform.ExtractTranslation()
+    quat = transform.ExtractRotationQuat()
+    quat_imag = quat.GetImaginary()
+    return (pos[0], pos[1], pos[2]), (
+        quat_imag[0],
+        quat_imag[1],
+        quat_imag[2],
+        quat.GetReal(),
+    )
+
+
 def build_lever_scene_assets(
     usd_path: str,
     usd_pos: tuple[float, float, float],
@@ -83,6 +117,8 @@ def build_lever_scene_assets(
     usd_scale: float,
     lever_dr: bool,
     table: str,
+    lever_dr_xy_jitter: float = _LEVER_DR_XY_JITTER,
+    lever_dr_yaw_jitter_deg: float = _LEVER_DR_YAW_RANGE_DEG,
 ) -> tuple[list[Asset], Object]:
     """Build the lever (+ optional table) scene assets for a lever_sim board USD.
 
@@ -94,6 +130,8 @@ def build_lever_scene_assets(
         usd_scale: Uniform scale (pass ``LEVER_USD_DEFAULT_SCALE`` for the tuned default).
         lever_dr: Enable reset-time xy/yaw pose jitter plus curated handle-color variation.
         table: Workbench asset key placed under the board (``"seattle_lab"`` or ``"none"``).
+        lever_dr_xy_jitter: Half-range for xy reset-time jitter, in metres.
+        lever_dr_yaw_jitter_deg: Half-range for reset-time yaw jitter, in degrees.
 
     Returns:
         A ``(extra_scene_assets, lever_object)`` tuple. ``extra_scene_assets`` contains the
@@ -102,6 +140,7 @@ def build_lever_scene_assets(
         reward/observation ``SceneEntityCfg``s.
     """
     import torch
+    import isaaclab.sim as sim_utils
     from isaaclab.utils.math import quat_from_euler_xyz
 
     # The asset's own geometry is already Z-up (flat board, handle pointing +Z) -- only usd_yaw
@@ -114,25 +153,73 @@ def build_lever_scene_assets(
             torch.tensor([lever_yaw_rad]),
         )[0].tolist()
     )
-    if lever_dr:
-        half_yaw_jitter_rad = math.radians(_LEVER_DR_YAW_RANGE_DEG)
+    usd_stem = Path(usd_path).stem.lower()
+    use_pose_range_reset = lever_dr and usd_stem not in LEVER_BASE_OBJECT_STEMS
+    if use_pose_range_reset:
+        half_yaw_jitter_rad = math.radians(lever_dr_yaw_jitter_deg)
         usd_initial_pose = PoseRange(
-            position_xyz_min=(usd_pos[0] - _LEVER_DR_XY_JITTER, usd_pos[1] - _LEVER_DR_XY_JITTER, usd_pos[2]),
-            position_xyz_max=(usd_pos[0] + _LEVER_DR_XY_JITTER, usd_pos[1] + _LEVER_DR_XY_JITTER, usd_pos[2]),
+            position_xyz_min=(
+                usd_pos[0] - lever_dr_xy_jitter,
+                usd_pos[1] - lever_dr_xy_jitter,
+                usd_pos[2],
+            ),
+            position_xyz_max=(
+                usd_pos[0] + lever_dr_xy_jitter,
+                usd_pos[1] + lever_dr_xy_jitter,
+                usd_pos[2],
+            ),
             rpy_min=(0.0, 0.0, lever_yaw_rad - half_yaw_jitter_rad),
             rpy_max=(0.0, 0.0, lever_yaw_rad + half_yaw_jitter_rad),
         )
     else:
         usd_initial_pose = Pose(position_xyz=usd_pos, rotation_xyzw=lever_rotation_xyzw)
 
-    usd_stem = Path(usd_path).stem.lower()
     lever_object = Object(
         name=usd_stem.replace("(", "_").replace(")", "_"),
         usd_path=usd_path,
         initial_pose=usd_initial_pose,
-        object_type=ObjectType.BASE if usd_stem == LEVER_AGAIN_STEM else None,
+        object_type=(
+            ObjectType.ARTICULATION
+            if usd_stem in LEVER_ARTICULATION_STEMS
+            else ObjectType.BASE if usd_stem in LEVER_BASE_OBJECT_STEMS else None
+        ),
         scale=(usd_scale, usd_scale, usd_scale),
     )
+    if usd_stem in LEVER_ARTICULATION_STEMS:
+        lever_object.object_cfg.spawn.rigid_props = sim_utils.RigidBodyPropertiesCfg(
+            disable_gravity=True,
+            retain_accelerations=False,
+            linear_damping=0.0,
+            angular_damping=100.0,
+            max_linear_velocity=1.0,
+            max_angular_velocity=5.0,
+            max_depenetration_velocity=0.5,
+            solver_position_iteration_count=64,
+            solver_velocity_iteration_count=16,
+        )
+        lever_object.object_cfg.spawn.articulation_props = (
+            sim_utils.ArticulationRootPropertiesCfg(
+                articulation_enabled=True,
+                enabled_self_collisions=False,
+                solver_position_iteration_count=64,
+                solver_velocity_iteration_count=16,
+                sleep_threshold=5.0e-5,
+                stabilization_threshold=1.0e-5,
+                fix_root_link=True,
+            )
+        )
+        lever_object.object_cfg.init_state.joint_pos = {
+            "RevoluteJoint": math.radians(90.0)
+        }
+        lever_object.object_cfg.init_state.joint_vel = {"RevoluteJoint": 0.0}
+    elif usd_stem in LEVER_BASE_OBJECT_STEMS and lever_dr:
+        # ``another_lever`` / ``lever_again`` are base USDs with a nested PhysX
+        # rigid handle. Moving the root Xform or nested RigidPrim from a reset
+        # event after GPU PhysX/Fabric starts can trip CUDA illegal-address
+        # failures. Keep these base-object levers physically fixed by default;
+        # the teleop dataset still gets safer visual, lighting, background, and
+        # robot-root variation.
+        pass
     scene_assets: list[Asset] = [lever_object]
 
     if lever_dr:

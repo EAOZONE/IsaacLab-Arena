@@ -55,6 +55,85 @@ _VALID_ALEX_EMBODIMENTS = (
 # Physics rate the base env config runs at (dt=1/200). We keep physics near this and pick an
 # integer decimation so the control (env step) rate lands exactly on the requested --control_hz.
 _BASE_PHYSICS_HZ = 200.0
+_DEFAULT_BACKGROUND_DR_POOL = ("packing_table",)
+_LEVER_BLOCKED_BACKGROUNDS = {"kitchen", "kitchen_with_open_drawer"}
+_LEVER_NON_CLONEABLE_BACKGROUNDS = {"ground_plane"}
+_LIGHT_DR_COLOR_PRESETS = {
+    "warm": (1.0, 0.86, 0.68),
+    "cool": (0.72, 0.82, 1.0),
+    "neutral": (0.9, 0.9, 0.9),
+    "greenish": (0.78, 1.0, 0.82),
+}
+
+
+def _parse_csv(value: str) -> list[str]:
+    return [part.strip() for part in value.split(",") if part.strip()]
+
+
+def _unique_preserving_order(values: list[str]) -> list[str]:
+    unique_values = []
+    for value in values:
+        if value not in unique_values:
+            unique_values.append(value)
+    return unique_values
+
+
+def _lever_safe_background_name(background_name: str) -> str:
+    if background_name in _LEVER_BLOCKED_BACKGROUNDS:
+        return "ground_plane"
+    return background_name
+
+
+def _lever_safe_background_pool(background_names: list[str]) -> list[str]:
+    return _unique_preserving_order(
+        [
+            background_name
+            for background_name in background_names
+            if background_name
+            not in _LEVER_BLOCKED_BACKGROUNDS | _LEVER_NON_CLONEABLE_BACKGROUNDS
+        ]
+    )
+
+
+def _parse_light_color_palette(value: str) -> list[tuple[float, float, float]]:
+    colors = []
+    for token in _parse_csv(value):
+        if token in _LIGHT_DR_COLOR_PRESETS:
+            colors.append(_LIGHT_DR_COLOR_PRESETS[token])
+            continue
+        components = [float(component) for component in token.split(":")]
+        assert len(components) == 3, (
+            f"Invalid light color '{token}'. Use a preset name "
+            f"({sorted(_LIGHT_DR_COLOR_PRESETS)}) or r:g:b floats in 0-1."
+        )
+        colors.append(tuple(components))
+    assert colors, "--light_dr_color_palette must contain at least one color."
+    return colors
+
+
+def _make_dr_background(asset_registry, background_name: str, instance_name: str):
+    from isaaclab_arena.assets.object import Object
+    from isaaclab_arena.assets.object_base import ObjectType
+
+    source_cls = asset_registry.get_asset_by_name(background_name)
+    usd_path = getattr(source_cls, "usd_path", None)
+    spawner_cfg = getattr(source_cls, "default_spawner_cfg", None)
+    spawner_cfg = spawner_cfg.copy() if spawner_cfg is not None else None
+    assert usd_path is not None or spawner_cfg is not None, (
+        f"Background '{background_name}' cannot be cloned for DR without instantiating it. "
+        "Use a registered background with a class-level usd_path or default_spawner_cfg."
+    )
+    scale = getattr(source_cls, "scale", (1.0, 1.0, 1.0)) or (1.0, 1.0, 1.0)
+    return Object(
+        name=instance_name,
+        usd_path=usd_path,
+        initial_pose=getattr(source_cls, "initial_pose", None),
+        object_type=getattr(source_cls, "object_type", ObjectType.BASE),
+        scale=scale,
+        spawner_cfg=spawner_cfg,
+        spawn_cfg_addon=getattr(source_cls, "spawn_cfg_addon", {}),
+        asset_cfg_addon=getattr(source_cls, "asset_cfg_addon", {}),
+    )
 
 
 def _make_control_hz_callback(control_hz: float | None):
@@ -78,6 +157,81 @@ def _make_control_hz_callback(control_hz: float | None):
     return _callback
 
 
+def _make_env_cfg_callback(
+    control_hz: float | None,
+    lever_success_object_name: str | None,
+    lever_success_angle_deg: float | None,
+    robot_dr: bool,
+    robot_position_xyz: tuple[float, float, float],
+    robot_yaw_rad: float,
+    robot_xy_jitter: float,
+    robot_yaw_jitter_rad: float,
+    background_dr_names: list[str],
+):
+    control_hz_callback = _make_control_hz_callback(control_hz)
+    if (
+        control_hz_callback is None
+        and lever_success_object_name is None
+        and not robot_dr
+        and not background_dr_names
+    ):
+        return None
+
+    def _callback(env_cfg):
+        if control_hz_callback is not None:
+            env_cfg = control_hz_callback(env_cfg)
+        if (
+            lever_success_object_name is not None
+            and lever_success_angle_deg is not None
+        ):
+            from isaaclab.managers import TerminationTermCfg
+
+            from isaaclab_arena.tasks.terminations import (
+                nested_lever_handle_angle_success,
+            )
+            from isaaclab_arena_environments.lever_scene_builder import (
+                LEVER_HANDLE_RIGID_BODY_SUFFIX,
+            )
+
+            env_cfg.terminations.success = TerminationTermCfg(
+                func=nested_lever_handle_angle_success,
+                params={
+                    "object_name": lever_success_object_name,
+                    "body_suffix": LEVER_HANDLE_RIGID_BODY_SUFFIX,
+                    "angle_threshold_deg": lever_success_angle_deg,
+                },
+            )
+        if robot_dr:
+            from isaaclab.managers import EventTermCfg, SceneEntityCfg
+
+            from isaaclab_arena.terms.events import randomize_articulation_root_pose
+
+            env_cfg.events.randomize_alex_root_pose = EventTermCfg(
+                func=randomize_articulation_root_pose,
+                mode="reset",
+                params={
+                    "asset_cfg": SceneEntityCfg("robot"),
+                    "base_position_xyz": robot_position_xyz,
+                    "base_yaw_rad": robot_yaw_rad,
+                    "xy_jitter": robot_xy_jitter,
+                    "yaw_jitter_rad": robot_yaw_jitter_rad,
+                },
+            )
+        if background_dr_names:
+            from isaaclab.managers import EventTermCfg
+
+            from isaaclab_arena.terms.events import randomize_background_visibility
+
+            env_cfg.events.randomize_background_visibility = EventTermCfg(
+                func=randomize_background_visibility,
+                mode="reset",
+                params={"background_names": background_dr_names},
+            )
+        return env_cfg
+
+    return _callback
+
+
 @register_environment
 class AlexEmptyEnvironment(ExampleEnvironmentBase):
     """Alex alone on a ground plane, spawn pose configurable from the CLI."""
@@ -90,13 +244,51 @@ class AlexEmptyEnvironment(ExampleEnvironmentBase):
         )
         from isaaclab_arena.scene.scene import Scene
         from isaaclab_arena.utils.pose import Pose
+        from isaaclab_arena_environments import lever_scene_builder
 
         assert (
             args_cli.embodiment in _VALID_ALEX_EMBODIMENTS
         ), f"Invalid Alex embodiment {args_cli.embodiment}; choose one of {_VALID_ALEX_EMBODIMENTS}"
-        assert len(args_cli.spawn_pos) == 3, f"--spawn_pos needs 3 comma-separated values, got {args_cli.spawn_pos}"
+        assert (
+            len(args_cli.spawn_pos) == 3
+        ), f"--spawn_pos needs 3 comma-separated values, got {args_cli.spawn_pos}"
 
-        background = self.asset_registry.get_asset_by_name(args_cli.background)()
+        lever_usd_stem = None
+        if args_cli.usd is not None:
+            from pathlib import Path
+
+            lever_usd_stem = Path(args_cli.usd).stem.lower()
+        is_lever_usd = lever_usd_stem in lever_scene_builder.LEVER_USD_STEMS
+        lever_dr_enabled = (
+            bool(args_cli.lever_dr) if args_cli.lever_dr is not None else is_lever_usd
+        )
+
+        background_name = (
+            _lever_safe_background_name(args_cli.background)
+            if is_lever_usd
+            else args_cli.background
+        )
+        background_dr_names = []
+        scene_assets = []
+        if is_lever_usd and background_name == "ground_plane":
+            scene_assets.append(self.asset_registry.get_asset_by_name("ground_plane")())
+        if lever_dr_enabled and is_lever_usd and args_cli.background_dr_pool != "none":
+            background_pool = _lever_safe_background_pool(
+                [args_cli.background] + _parse_csv(args_cli.background_dr_pool)
+            )
+            for index, background_name in enumerate(background_pool):
+                instance_name = f"dr_background_{index:02d}_{background_name}"
+                scene_assets.append(
+                    _make_dr_background(
+                        self.asset_registry, background_name, instance_name
+                    )
+                )
+                background_dr_names.append(instance_name)
+        else:
+            if not (is_lever_usd and background_name == "ground_plane"):
+                scene_assets.append(
+                    self.asset_registry.get_asset_by_name(background_name)()
+                )
 
         # ground_plane (the default background) ships with no lights, so cameras render the
         # scene as near-black (see e.g. GR00T policy debugging: a vision-conditioned policy
@@ -115,30 +307,52 @@ class AlexEmptyEnvironment(ExampleEnvironmentBase):
             )
             light.add_hdr(hdr_registry.get_hdr_by_name(args_cli.hdr)())
 
-            if args_cli.lever_dr:
-                from isaaclab_arena.variations.light_property_variation import LightPropertyVariation
+            if lever_dr_enabled:
+                from isaaclab_arena.variations.light_property_variation import (
+                    LightColorVariation,
+                    LightColorVariationCfg,
+                    LightPropertyVariation,
+                )
 
                 light.get_variation("hdr_image").enable()
                 light.add_variation(LightPropertyVariation(light))
                 light.get_variation("light_intensity").enable()
+                light.add_variation(
+                    LightColorVariation(
+                        light,
+                        cfg=LightColorVariationCfg(
+                            palette=_parse_light_color_palette(
+                                args_cli.light_dr_color_palette
+                            )
+                        ),
+                    )
+                )
+                light.get_variation("light_color").enable()
 
-        scene_assets = [background]
         if light is not None:
             scene_assets.append(light)
+        lever_success_object_name = None
         if args_cli.usd is not None:
-            from pathlib import Path
-
             from isaaclab_arena.assets.object import Object
-            from isaaclab_arena_environments import lever_scene_builder
 
-            assert len(args_cli.usd_pos) == 3, f"--usd_pos needs 3 comma-separated values, got {args_cli.usd_pos}"
-            usd_stem = Path(args_cli.usd).stem.lower()
-            if usd_stem in lever_scene_builder.LEVER_USD_STEMS and tuple(args_cli.usd_pos) == (0.6, 0.0, 0.9):
+            assert (
+                len(args_cli.usd_pos) == 3
+            ), f"--usd_pos needs 3 comma-separated values, got {args_cli.usd_pos}"
+            usd_stem = lever_usd_stem
+            if usd_stem in lever_scene_builder.LEVER_USD_STEMS and tuple(
+                args_cli.usd_pos
+            ) == (0.6, 0.0, 0.9):
                 # Generic default; use the tuned board pose unless the caller overrides it.
                 usd_pos = lever_scene_builder.LEVER_USD_DEFAULT_POS
-                usd_yaw = lever_scene_builder.LEVER_USD_DEFAULT_YAW if args_cli.usd_yaw == 0.0 else args_cli.usd_yaw
+                usd_yaw = (
+                    lever_scene_builder.LEVER_USD_DEFAULT_YAW
+                    if args_cli.usd_yaw == 0.0
+                    else args_cli.usd_yaw
+                )
                 usd_scale = (
-                    lever_scene_builder.LEVER_USD_DEFAULT_SCALE if args_cli.usd_scale == 1.0 else args_cli.usd_scale
+                    lever_scene_builder.LEVER_USD_DEFAULT_SCALE
+                    if args_cli.usd_scale == 1.0
+                    else args_cli.usd_scale
                 )
             else:
                 usd_pos = tuple(args_cli.usd_pos)
@@ -146,17 +360,24 @@ class AlexEmptyEnvironment(ExampleEnvironmentBase):
                 usd_scale = args_cli.usd_scale
 
             if usd_stem in lever_scene_builder.LEVER_USD_STEMS:
-                lever_assets, _lever_object = lever_scene_builder.build_lever_scene_assets(
-                    usd_path=args_cli.usd,
-                    usd_pos=usd_pos,
-                    usd_yaw=usd_yaw,
-                    usd_scale=usd_scale,
-                    lever_dr=args_cli.lever_dr,
-                    table=args_cli.table,
+                lever_assets, lever_object = (
+                    lever_scene_builder.build_lever_scene_assets(
+                        usd_path=args_cli.usd,
+                        usd_pos=usd_pos,
+                        usd_yaw=usd_yaw,
+                        usd_scale=usd_scale,
+                        lever_dr=lever_dr_enabled,
+                        table=args_cli.table,
+                        lever_dr_xy_jitter=args_cli.lever_dr_xy_jitter,
+                        lever_dr_yaw_jitter_deg=args_cli.lever_dr_yaw_jitter_deg,
+                    )
                 )
+                lever_success_object_name = lever_object.name
                 scene_assets.extend(lever_assets)
             else:
-                usd_initial_pose = Pose(position_xyz=usd_pos, rotation_xyzw=(0.0, 0.70711, 0.70711, 0.0))
+                usd_initial_pose = Pose(
+                    position_xyz=usd_pos, rotation_xyzw=(0.0, 0.70711, 0.70711, 0.0)
+                )
                 scene_assets.append(
                     Object(
                         name=usd_stem.replace("(", "_").replace(")", "_"),
@@ -166,7 +387,13 @@ class AlexEmptyEnvironment(ExampleEnvironmentBase):
                     )
                 )
 
-        embodiment = self.asset_registry.get_asset_by_name(args_cli.embodiment)(enable_cameras=args_cli.enable_cameras)
+        lever_success_angle_deg = None
+        if lever_success_object_name is not None:
+            lever_success_angle_deg = args_cli.lever_success_angle_deg
+
+        embodiment = self.asset_registry.get_asset_by_name(args_cli.embodiment)(
+            enable_cameras=args_cli.enable_cameras
+        )
         half_yaw = math.radians(args_cli.spawn_yaw) / 2.0
         embodiment.set_initial_pose(
             Pose(
@@ -177,19 +404,33 @@ class AlexEmptyEnvironment(ExampleEnvironmentBase):
 
         teleop_device = None
         if args_cli.teleop_device is not None:
-            teleop_device = self.device_registry.get_device_by_name(args_cli.teleop_device)()
+            teleop_device = self.device_registry.get_device_by_name(
+                args_cli.teleop_device
+            )()
 
         return IsaacLabArenaEnvironment(
             name=self.name,
             embodiment=embodiment,
             scene=Scene(assets=scene_assets),
             teleop_device=teleop_device,
-            env_cfg_callback=_make_control_hz_callback(args_cli.control_hz),
+            env_cfg_callback=_make_env_cfg_callback(
+                args_cli.control_hz,
+                lever_success_object_name,
+                lever_success_angle_deg,
+                robot_dr=lever_dr_enabled and is_lever_usd,
+                robot_position_xyz=tuple(args_cli.spawn_pos),
+                robot_yaw_rad=math.radians(args_cli.spawn_yaw),
+                robot_xy_jitter=args_cli.robot_dr_xy_jitter,
+                robot_yaw_jitter_rad=math.radians(args_cli.robot_dr_yaw_jitter_deg),
+                background_dr_names=background_dr_names,
+            ),
         )
 
     @staticmethod
     def add_cli_args(parser: argparse.ArgumentParser) -> None:
-        parser.add_argument("--teleop_device", type=str, default=None, help="e.g. captury or openxr")
+        parser.add_argument(
+            "--teleop_device", type=str, default=None, help="e.g. captury or openxr"
+        )
         parser.add_argument("--embodiment", type=str, default="alex_v2_ability_hands")
         parser.add_argument(
             "--spawn_pos",
@@ -220,17 +461,59 @@ class AlexEmptyEnvironment(ExampleEnvironmentBase):
         )
         parser.add_argument(
             "--lever_dr",
-            action="store_true",
+            action=argparse.BooleanOptionalAction,
+            default=None,
             help=(
-                "Enable domain randomization for the lever setup: reset-time xy/yaw pose jitter,"
-                " a curated handle-color palette, and HDR-skybox + per-reset light-intensity"
-                " variation. Off by default (identical fixed pose/color/lighting to today)."
+                "Enable domain randomization for lever USD scenes. Defaults to enabled for recognized "
+                "lever_sim USDs and disabled for non-lever USDs; pass --no-lever_dr to force fixed setup."
+            ),
+        )
+        parser.add_argument(
+            "--lever_dr_xy_jitter",
+            type=float,
+            default=0.05,
+            help="Lever board reset-time xy jitter half-range in metres when lever DR is enabled.",
+        )
+        parser.add_argument(
+            "--lever_dr_yaw_jitter_deg",
+            type=float,
+            default=25.0,
+            help="Lever board reset-time yaw jitter half-range in degrees when lever DR is enabled.",
+        )
+        parser.add_argument(
+            "--robot_dr_xy_jitter",
+            type=float,
+            default=0.04,
+            help="Alex root reset-time xy jitter half-range in metres when lever DR is enabled.",
+        )
+        parser.add_argument(
+            "--robot_dr_yaw_jitter_deg",
+            type=float,
+            default=8.0,
+            help="Alex root reset-time yaw jitter half-range in degrees when lever DR is enabled.",
+        )
+        parser.add_argument(
+            "--background_dr_pool",
+            type=str,
+            default=",".join(_DEFAULT_BACKGROUND_DR_POOL),
+            help=(
+                "Comma-separated registered background assets to preload and visibility-swap per reset "
+                "when lever DR is enabled. The --background asset is always prepended. Pass 'none' to disable."
+            ),
+        )
+        parser.add_argument(
+            "--light_dr_color_palette",
+            type=str,
+            default="warm,cool,neutral,greenish",
+            help=(
+                "Comma-separated dome-light color presets or r:g:b values for per-reset light color DR. "
+                f"Presets: {','.join(sorted(_LIGHT_DR_COLOR_PRESETS))}."
             ),
         )
         parser.add_argument(
             "--table",
             type=str,
-            default="seattle_lab",
+            default="none",
             help=(
                 "Workbench placed under a lever_sim board --usd asset (Lever.usd / Lever_revolute.usd),"
                 " so it sits on a table instead of floating over the bare ground plane (visual"
@@ -270,4 +553,10 @@ class AlexEmptyEnvironment(ExampleEnvironmentBase):
                 "match the GR00T lever_eef policy's policy_control_hz and remove zero-order-hold "
                 "stretching (physics stays near 200 Hz via an integer decimation)."
             ),
+        )
+        parser.add_argument(
+            "--lever_success_angle_deg",
+            type=float,
+            default=20.0,
+            help="Lever Handle_1 rotation from reset pose, in degrees, that counts as success for --usd lever scenes.",
         )

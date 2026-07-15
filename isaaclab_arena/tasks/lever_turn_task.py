@@ -20,8 +20,10 @@ from isaaclab_arena.embodiments.common.arm_mode import ArmMode
 from isaaclab_arena.embodiments.embodiment_base import EmbodimentBase
 from isaaclab_arena.metrics.metric_base import MetricBase
 from isaaclab_arena.metrics.success_rate import SuccessRateMetric
-from isaaclab_arena.tasks.common.lever_turn_mimic import LeverTurnMimicEnvCfg, make_lever_turn_subtask_obs_cfg
-from isaaclab_arena.tasks.observations import observations
+from isaaclab_arena.tasks.common.lever_turn_mimic import (
+    LeverTurnMimicEnvCfg,
+    make_lever_turn_subtask_obs_cfg,
+)
 from isaaclab_arena.tasks.rewards.lever_turn_rewards import (
     RIGHT_ABILITY_HAND_JOINT_NAMES,
     HingeAngleFromRest,
@@ -30,6 +32,8 @@ from isaaclab_arena.tasks.rewards.lever_turn_rewards import (
     LeverTurnSuccess,
     grasp_readiness,
     hand_object_distance,
+    lever_angular_velocity_norm,
+    lever_position_in_frame,
 )
 from isaaclab_arena.tasks.task_base import TaskBase
 from isaaclab_arena.utils.cameras import get_viewer_cfg_look_at_object
@@ -83,7 +87,9 @@ class LeverTurnTaskRL(TaskBase):
         return self.events_cfg
 
     def get_mimic_env_cfg(self, arm_mode: ArmMode) -> Any:
-        return LeverTurnMimicEnvCfg(arm_mode=arm_mode, lever_object_name=self.lever_object.name)
+        return LeverTurnMimicEnvCfg(
+            arm_mode=arm_mode, lever_object_name=self.lever_object.name
+        )
 
     def get_mimic_subtask_obs_cfg(self) -> Any:
         return make_lever_turn_subtask_obs_cfg(self.lever_object)
@@ -132,11 +138,11 @@ class LeverTurnObservationsCfg:
                 params={"object_cfg": SceneEntityCfg(lever_object.name)},
             )
             hinge_angular_velocity = ObsTerm(
-                func=observations.object_angular_velocity_norm,
+                func=lever_angular_velocity_norm,
                 params={"object_cfg": SceneEntityCfg(lever_object.name)},
             )
             lever_position_in_robot_frame = ObsTerm(
-                func=observations.object_position_in_frame,
+                func=lever_position_in_frame,
                 params={
                     "root_frame_cfg": SceneEntityCfg(robot_name),
                     "object_cfg": SceneEntityCfg(lever_object.name),
@@ -172,7 +178,9 @@ class LeverTurnRewardCfg:
             params={
                 "std": 0.1,
                 "object_cfg": SceneEntityCfg(lever_object.name),
-                "robot_cfg": SceneEntityCfg(robot_name, body_names=["RIGHT_GRIPPER_Z_LINK"]),
+                "robot_cfg": SceneEntityCfg(
+                    robot_name, body_names=["RIGHT_GRIPPER_Z_LINK"]
+                ),
             },
             weight=1.0,
         )
@@ -181,8 +189,12 @@ class LeverTurnRewardCfg:
             params={
                 "std": 0.1,
                 "object_cfg": SceneEntityCfg(lever_object.name),
-                "robot_cfg": SceneEntityCfg(robot_name, body_names=["RIGHT_GRIPPER_Z_LINK"]),
-                "hand_joint_cfg": SceneEntityCfg(robot_name, joint_names=RIGHT_ABILITY_HAND_JOINT_NAMES),
+                "robot_cfg": SceneEntityCfg(
+                    robot_name, body_names=["RIGHT_GRIPPER_Z_LINK"]
+                ),
+                "hand_joint_cfg": SceneEntityCfg(
+                    robot_name, joint_names=RIGHT_ABILITY_HAND_JOINT_NAMES
+                ),
             },
             weight=8.0,
         )
@@ -199,7 +211,9 @@ class LeverTurnRewardCfg:
             },
             weight=15.0,
         )
-        self.action_rate = RewardTermCfg(func=mdp_isaac_lab.action_rate_l2, weight=-0.0001)
+        self.action_rate = RewardTermCfg(
+            func=mdp_isaac_lab.action_rate_l2, weight=-0.0001
+        )
         self.joint_vel = RewardTermCfg(
             func=mdp_isaac_lab.joint_vel_l2,
             weight=-0.0001,

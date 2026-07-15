@@ -104,6 +104,43 @@ def objects_in_proximity(
     return done
 
 
+def nested_lever_handle_angle_success(
+    env: ManagerBasedRLEnv,
+    object_name: str,
+    body_suffix: str,
+    angle_threshold_deg: float,
+) -> torch.Tensor:
+    """Success when a nested lever handle rotates past a threshold from reset pose.
+
+    ``LEVER_AGAIN.usd`` is spawned as a base object, while ``Handle_1`` is the rigid body that
+    actually moves on the raw USD revolute joint. Read that nested body directly instead of the
+    scene object's root pose.
+    """
+    from isaacsim.core.prims import RigidPrim
+
+    base_env = env.unwrapped if hasattr(env, "unwrapped") else env
+    handle_quats_xyzw = []
+    for env_id in range(base_env.num_envs):
+        prim_path = f"/World/envs/env_{env_id}/{object_name}{body_suffix}"
+        _, quat_wxyz = RigidPrim(prim_path).get_world_poses()
+        handle_quats_xyzw.append(torch.as_tensor(quat_wxyz[0], device=base_env.device)[[1, 2, 3, 0]])
+    handle_quat_xyzw = torch.stack(handle_quats_xyzw, dim=0)
+
+    if not hasattr(base_env, "_lever_rest_quat_by_object"):
+        base_env._lever_rest_quat_by_object = {}
+    rest_quats = base_env._lever_rest_quat_by_object.get(object_name)
+    if rest_quats is None or rest_quats.shape[0] != base_env.num_envs:
+        rest_quats = handle_quat_xyzw.detach().clone()
+        base_env._lever_rest_quat_by_object[object_name] = rest_quats
+    rest_quats = rest_quats.to(device=base_env.device, dtype=handle_quat_xyzw.dtype)
+
+    dot = torch.abs(torch.sum(handle_quat_xyzw * rest_quats, dim=-1)).clamp(-1.0, 1.0)
+    angle_deg = torch.rad2deg(2.0 * torch.acos(dot))
+    if hasattr(base_env, "extras"):
+        base_env.extras["lever_angle_deg"] = angle_deg
+    return angle_deg >= angle_threshold_deg
+
+
 def lift_object_il_success(
     env: ManagerBasedRLEnv,
     object_cfg: SceneEntityCfg = SceneEntityCfg("object"),

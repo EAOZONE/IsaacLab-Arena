@@ -4,13 +4,79 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import torch
+import os
 from collections.abc import Sequence
 
 import warp as wp
 from isaaclab.assets import Articulation, RigidObject
 from isaaclab.envs import ManagerBasedRLEnv
 from isaaclab.managers import ManagerTermBase, ManagerTermBaseCfg, SceneEntityCfg
-from isaaclab.utils.math import quat_error_magnitude
+from isaaclab.utils.math import quat_error_magnitude, subtract_frame_transforms
+
+
+def _is_isaaclab_rigid_object(scene_object) -> bool:
+    return hasattr(scene_object, "data") and hasattr(scene_object.data, "root_quat_w")
+
+
+def _nested_lever_handle_pose_w(
+    env: ManagerBasedRLEnv, object_name: str
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Return world pose for the moving handle inside a base-object lever USD."""
+    from isaaclab_arena_environments.lever_scene_builder import (
+        LEVER_HANDLE_RIGID_BODY_SUFFIX,
+    )
+    from isaacsim.core.prims import RigidPrim
+
+    positions = []
+    quats_xyzw = []
+    for env_id in range(env.num_envs):
+        prim_path = (
+            f"/World/envs/env_{env_id}/{object_name}{LEVER_HANDLE_RIGID_BODY_SUFFIX}"
+        )
+        pos_w, quat_wxyz = RigidPrim(prim_path).get_world_poses()
+        positions.append(torch.as_tensor(pos_w[0], device=env.device))
+        quats_xyzw.append(
+            torch.as_tensor(quat_wxyz[0], device=env.device)[[1, 2, 3, 0]]
+        )
+    return torch.stack(positions, dim=0), torch.stack(quats_xyzw, dim=0)
+
+
+def lever_handle_position_w(
+    env: ManagerBasedRLEnv, object_cfg: SceneEntityCfg
+) -> torch.Tensor:
+    """World position of a lever handle, including handles nested under base-object USDs."""
+    object = env.scene[object_cfg.name]
+    if _is_isaaclab_rigid_object(object):
+        return wp.to_torch(object.data.root_pos_w)[:, :3]
+    position_w, _ = _nested_lever_handle_pose_w(env, object_cfg.name)
+    return position_w
+
+
+def lever_position_in_frame(
+    env: ManagerBasedRLEnv,
+    root_frame_cfg: SceneEntityCfg,
+    object_cfg: SceneEntityCfg,
+) -> torch.Tensor:
+    """Lever handle position in the requested root frame."""
+    root_frame: RigidObject = env.scene[root_frame_cfg.name]
+    object_pos_w = lever_handle_position_w(env, object_cfg)
+    object_pos_b, _ = subtract_frame_transforms(
+        wp.to_torch(root_frame.data.root_pos_w),
+        wp.to_torch(root_frame.data.root_quat_w),
+        object_pos_w,
+    )
+    return object_pos_b
+
+
+def lever_angular_velocity_norm(
+    env: ManagerBasedRLEnv,
+    object_cfg: SceneEntityCfg = SceneEntityCfg("object"),
+) -> torch.Tensor:
+    """L2 norm of the moving lever handle's angular velocity in the world frame (rad/s)."""
+    object = env.scene[object_cfg.name]
+    if _is_isaaclab_rigid_object(object):
+        return torch.norm(wp.to_torch(object.data.root_ang_vel_w), dim=1, keepdim=True)
+    return torch.zeros((env.num_envs, 1), device=env.device)
 
 
 class HingeAngleFromRest(ManagerTermBase):
@@ -62,22 +128,30 @@ class HingeAngleFromRest(ManagerTermBase):
             env_ids = slice(None)
         self._tracking[env_ids] = True
 
-    def _sync_rest_quat_if_needed(self, env: ManagerBasedRLEnv, current_quat_w: torch.Tensor) -> None:
+    def _sync_rest_quat_if_needed(
+        self, env: ManagerBasedRLEnv, current_quat_w: torch.Tensor
+    ) -> None:
         self._tracking |= env.episode_length_buf == 1
         if not self._tracking.any():
             return
         env_ids = self._tracking.nonzero(as_tuple=True)[0]
         self._rest_quat_w[env_ids] = current_quat_w[env_ids].clone()
 
-        object: RigidObject = env.scene[self._object_name]
-        ang_speed = torch.norm(wp.to_torch(object.data.root_ang_vel_w), dim=-1)
+        ang_speed = lever_angular_velocity_norm(
+            env, SceneEntityCfg(self._object_name)
+        ).squeeze(-1)
         settled = ang_speed < self._SETTLE_ANG_SPEED_THRESHOLD
         timed_out = env.episode_length_buf >= self._SETTLE_TIMEOUT_STEPS
         self._tracking &= ~(settled | timed_out)
 
-    def __call__(self, env: ManagerBasedRLEnv, object_cfg: SceneEntityCfg) -> torch.Tensor:
-        object: RigidObject = env.scene[object_cfg.name]
-        current_quat_w = wp.to_torch(object.data.root_quat_w)
+    def __call__(
+        self, env: ManagerBasedRLEnv, object_cfg: SceneEntityCfg
+    ) -> torch.Tensor:
+        object = env.scene[object_cfg.name]
+        if _is_isaaclab_rigid_object(object):
+            current_quat_w = wp.to_torch(object.data.root_quat_w)
+        else:
+            _, current_quat_w = _nested_lever_handle_pose_w(env, object_cfg.name)
         self._sync_rest_quat_if_needed(env, current_quat_w)
         return quat_error_magnitude(current_quat_w, self._rest_quat_w)
 
@@ -85,7 +159,9 @@ class HingeAngleFromRest(ManagerTermBase):
 class HingeAngleFromRestObs(HingeAngleFromRest):
     """Like :class:`HingeAngleFromRest`, but returns shape ``(num_envs, 1)`` for obs concatenation."""
 
-    def __call__(self, env: ManagerBasedRLEnv, object_cfg: SceneEntityCfg) -> torch.Tensor:
+    def __call__(
+        self, env: ManagerBasedRLEnv, object_cfg: SceneEntityCfg
+    ) -> torch.Tensor:
         return super().__call__(env, object_cfg).unsqueeze(-1)
 
 
@@ -104,9 +180,8 @@ def hand_object_distance(
     end-effector poses the same way via ``mdp.get_eef_pos``).
     """
     robot: Articulation = env.scene[robot_cfg.name]
-    object: RigidObject = env.scene[object_cfg.name]
     hand_pos_w = wp.to_torch(robot.data.body_pos_w)[:, robot_cfg.body_ids[0]]
-    object_pos_w = wp.to_torch(object.data.root_pos_w)
+    object_pos_w = lever_handle_position_w(env, object_cfg)
     distance = torch.norm(hand_pos_w - object_pos_w, dim=1)
     return 1 - torch.tanh(distance / std)
 
@@ -130,7 +205,9 @@ RIGHT_ABILITY_HAND_JOINT_NAMES = [
 ]
 
 
-def right_hand_closedness(env: ManagerBasedRLEnv, hand_joint_cfg: SceneEntityCfg) -> torch.Tensor:
+def right_hand_closedness(
+    env: ManagerBasedRLEnv, hand_joint_cfg: SceneEntityCfg
+) -> torch.Tensor:
     """Worst-case (min) normalized closedness (0 = fully open, 1 = fully closed) of the right ability hand.
 
     Reads live ``joint_pos_limits`` from the articulation rather than a hardcoded copy, since
@@ -182,8 +259,16 @@ class LeverTurnSuccess(HingeAngleFromRest):
 
     def __init__(self, cfg: ManagerTermBaseCfg, env: ManagerBasedRLEnv):
         super().__init__(cfg, env)
-        self._steps_above_threshold = torch.zeros(env.num_envs, dtype=torch.long, device=env.device)
-        self._last_processed_step = torch.full((env.num_envs,), -1, dtype=torch.long, device=env.device)
+        debounce_steps = int(
+            os.environ.get("ARENA_LEVER_SUCCESS_DEBOUNCE_STEPS", self._DEBOUNCE_STEPS)
+        )
+        self._steps_above_threshold = torch.zeros(
+            env.num_envs, dtype=torch.long, device=env.device
+        )
+        self._debounce_steps = debounce_steps
+        self._last_processed_step = torch.full(
+            (env.num_envs,), -1, dtype=torch.long, device=env.device
+        )
 
     def reset(self, env_ids: Sequence[int] | None = None) -> None:
         super().reset(env_ids)
@@ -192,7 +277,9 @@ class LeverTurnSuccess(HingeAngleFromRest):
         self._steps_above_threshold[env_ids] = 0
         self._last_processed_step[env_ids] = -1
 
-    def __call__(self, env: ManagerBasedRLEnv, object_cfg: SceneEntityCfg, angle_threshold: float) -> torch.Tensor:
+    def __call__(
+        self, env: ManagerBasedRLEnv, object_cfg: SceneEntityCfg, angle_threshold: float
+    ) -> torch.Tensor:
         angle = super().__call__(env, object_cfg)
         above = angle > angle_threshold
         episode_step = env.episode_length_buf
@@ -205,7 +292,7 @@ class LeverTurnSuccess(HingeAngleFromRest):
             torch.zeros_like(self._steps_above_threshold[new_step]),
         )
         self._last_processed_step = episode_step.clone()
-        return self._steps_above_threshold >= self._DEBOUNCE_STEPS
+        return self._steps_above_threshold >= self._debounce_steps
 
 
 class LeverEngaged(HingeAngleFromRest):
@@ -214,7 +301,9 @@ class LeverEngaged(HingeAngleFromRest):
     def __init__(self, cfg: ManagerTermBaseCfg, env: ManagerBasedRLEnv):
         super().__init__(cfg, env)
         self._engaged = torch.zeros(env.num_envs, dtype=torch.bool, device=env.device)
-        self._last_episode_step = torch.full((env.num_envs,), -1, dtype=torch.long, device=env.device)
+        self._last_episode_step = torch.full(
+            (env.num_envs,), -1, dtype=torch.long, device=env.device
+        )
 
     def reset(self, env_ids: Sequence[int] | None = None) -> None:
         super().reset(env_ids)
@@ -223,7 +312,9 @@ class LeverEngaged(HingeAngleFromRest):
         self._engaged[env_ids] = False
         self._last_episode_step[env_ids] = -1
 
-    def __call__(self, env: ManagerBasedRLEnv, object_cfg: SceneEntityCfg, angle_threshold: float) -> torch.Tensor:
+    def __call__(
+        self, env: ManagerBasedRLEnv, object_cfg: SceneEntityCfg, angle_threshold: float
+    ) -> torch.Tensor:
         angle = super().__call__(env, object_cfg)
         episode_step = env.episode_length_buf
         reset_ids = episode_step < self._last_episode_step
@@ -242,6 +333,8 @@ class LeverTurnedBonus(HingeAngleFromRest):
     separate from any ``HingeAngleFromRest`` term also configured as an observation or reward.
     """
 
-    def __call__(self, env: ManagerBasedRLEnv, object_cfg: SceneEntityCfg, angle_threshold: float) -> torch.Tensor:
+    def __call__(
+        self, env: ManagerBasedRLEnv, object_cfg: SceneEntityCfg, angle_threshold: float
+    ) -> torch.Tensor:
         angle = super().__call__(env, object_cfg)
         return (angle > angle_threshold).float()
