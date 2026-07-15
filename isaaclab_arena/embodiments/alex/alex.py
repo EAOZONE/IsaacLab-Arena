@@ -24,7 +24,12 @@ import isaaclab_tasks.manager_based.manipulation.pick_place.mdp as mdp
 import warp as wp
 from isaaclab.actuators import DelayedPDActuatorCfg, ImplicitActuatorCfg
 from isaaclab.assets.articulation import ArticulationCfg
-from isaaclab.controllers.pink_ik import DampingTaskCfg, LocalFrameTaskCfg, NullSpacePostureTaskCfg, PinkIKControllerCfg
+from isaaclab.controllers.pink_ik import (
+    DampingTaskCfg,
+    LocalFrameTaskCfg,
+    NullSpacePostureTaskCfg,
+    PinkIKControllerCfg,
+)
 from isaaclab.envs import ManagerBasedEnv, ManagerBasedRLMimicEnv
 from isaaclab.envs.mdp.actions import JointPositionActionCfg
 from isaaclab.envs.mdp.actions.pink_actions_cfg import PinkInverseKinematicsActionCfg
@@ -39,8 +44,12 @@ from isaaclab_teleop.xr_cfg import XrAnchorRotationMode
 
 from isaaclab_arena.assets.register import register_asset
 from isaaclab_arena.embodiments.common.arm_mode import ArmMode
-from isaaclab_arena.embodiments.common.mimic_utils import get_rigid_and_articulated_object_poses
-from isaaclab_arena.embodiments.common.pink_ik_failure_tracking import IKFailureTrackingPinkInverseKinematicsAction
+from isaaclab_arena.embodiments.common.mimic_utils import (
+    get_rigid_and_articulated_object_poses,
+)
+from isaaclab_arena.embodiments.common.pink_ik_failure_tracking import (
+    IKFailureTrackingPinkInverseKinematicsAction,
+)
 from isaaclab_arena.embodiments.common.rl_pink_ik_action import RLPinkIKActionCfg
 from isaaclab_arena.embodiments.embodiment_base import EmbodimentBase
 from isaaclab_arena.terms.events import reset_all_articulation_joints
@@ -66,7 +75,9 @@ from isaaclab_arena.utils.pose import Pose
 #   Resolved automatically when the SDK root is mounted (Option A).
 #   Otherwise set ``ABILITY_HAND_MODELS_DIR`` to the mounted hands package root.
 # ---------------------------------------------------------------------------
-_ABILITY_HAND_LEFT_URDF = os.path.join("urdf", "abilityHand", "ability_hand_left_large.urdf")
+_ABILITY_HAND_LEFT_URDF = os.path.join(
+    "urdf", "abilityHand", "ability_hand_left_large.urdf"
+)
 
 
 def _has_alex_description(models_dir: str, robot_version: str) -> bool:
@@ -79,7 +90,9 @@ def _resolve_alex_models_dir() -> str:
     # Docker -m mounts a host directory at /models. Accept either alex-models alone
     # or the full ihmc-alex-sdk root (alex-models is then /models/alex-models).
     for candidate in ("/models", "/models/alex-models"):
-        if _has_alex_description(candidate, "V1") or _has_alex_description(candidate, "V2"):
+        if _has_alex_description(candidate, "V1") or _has_alex_description(
+            candidate, "V2"
+        ):
             return candidate
     return "/models"
 
@@ -113,16 +126,23 @@ def _alex_arena_urdf_paths(robot_version: str) -> dict[str, str]:
         "urdf_dir": urdf_dir,
         "nubs_resolved": os.path.join(urdf_dir, f"alex_{ver}_nubs_arena_resolved.urdf"),
         "nubs_pink_ik": os.path.join(urdf_dir, f"alex_{ver}_nubs_arena_pink_ik.urdf"),
-        "ability_hands_resolved": os.path.join(urdf_dir, f"alex_{ver}_ability_hands_arena_resolved.urdf"),
-        "ability_hands_pink_ik": os.path.join(urdf_dir, f"alex_{ver}_ability_hands_arena_pink_ik.urdf"),
+        "ability_hands_resolved": os.path.join(
+            urdf_dir, f"alex_{ver}_ability_hands_arena_resolved.urdf"
+        ),
+        "ability_hands_pink_ik": os.path.join(
+            urdf_dir, f"alex_{ver}_ability_hands_arena_pink_ik.urdf"
+        ),
     }
 
 
 def _mesh_path_replacements() -> dict[str, str]:
     replacements = {
-        f"package://alex_{version}_description/": _alex_description_dir(version) + "/" for version in (ALEX_V1, ALEX_V2)
+        f"package://alex_{version}_description/": _alex_description_dir(version) + "/"
+        for version in (ALEX_V1, ALEX_V2)
     }
-    replacements["package://abilityHand/"] = os.path.join(_ABILITY_HAND_MODELS_DIR, "meshes", "abilityHand") + "/"
+    replacements["package://abilityHand/"] = (
+        os.path.join(_ABILITY_HAND_MODELS_DIR, "meshes", "abilityHand") + "/"
+    )
     return replacements
 
 
@@ -157,7 +177,13 @@ HANDS_PATH = _ABILITY_HAND_MODELS_DIR + "/"
 ALEX_V1 = "V1"
 ALEX_V2 = "V2"
 
-ALEX_NUBFOREARMS_PARTS = ["head", "leftUpperArm", "leftFixedForearm", "rightUpperArm", "rightFixedForearm"]
+ALEX_NUBFOREARMS_PARTS = [
+    "head",
+    "leftUpperArm",
+    "leftFixedForearm",
+    "rightUpperArm",
+    "rightFixedForearm",
+]
 
 CONTROL_DT = 0.02
 SIM_DT = 0.005
@@ -248,7 +274,9 @@ def merge_urdfs(
 
     main_directory = os.path.join(_alex_urdf_dir(robot_version), "")
 
-    base_urdf_file = os.path.join(main_directory, f"{prefix}{robot_version.lower()}.lowerBody.urdf")
+    base_urdf_file = os.path.join(
+        main_directory, f"{prefix}{robot_version.lower()}.lowerBody.urdf"
+    )
     base_urdf = etree.parse(base_urdf_file)
     base_robot = base_urdf.getroot()
 
@@ -282,7 +310,9 @@ def merge_urdfs(
                 if "ability_hand" in wanted_part:
                     for visual in link.findall("visual"):
                         mesh_location = visual.find("geometry/mesh").get("filename")
-                        new_location = mesh_location.replace("package://", os.path.join(HANDS_PATH, "meshes") + "/")
+                        new_location = mesh_location.replace(
+                            "package://", os.path.join(HANDS_PATH, "meshes") + "/"
+                        )
                         visual.find("geometry/mesh").set("filename", new_location)
                 base_robot.append(link)
 
@@ -297,7 +327,9 @@ def merge_urdfs(
                     link.remove(collision)
 
     save_filepath = os.path.join(main_directory, output_name + ".urdf")
-    base_urdf.write(save_filepath, pretty_print=True, xml_declaration=True, encoding="UTF-8")
+    base_urdf.write(
+        save_filepath, pretty_print=True, xml_declaration=True, encoding="UTF-8"
+    )
     return save_filepath
 
 
@@ -378,10 +410,14 @@ _ALEX_SPAWN_CFG = sim_utils.UrdfFileCfg(
         max_depenetration_velocity=1.0,
     ),
     articulation_props=sim_utils.ArticulationRootPropertiesCfg(
-        enabled_self_collisions=True, solver_position_iteration_count=8, solver_velocity_iteration_count=4
+        enabled_self_collisions=True,
+        solver_position_iteration_count=8,
+        solver_velocity_iteration_count=4,
     ),
     joint_drive=sim_utils.UrdfConverterCfg.JointDriveCfg(
-        gains=sim_utils.UrdfConverterCfg.JointDriveCfg.PDGainsCfg(stiffness=0, damping=0)
+        gains=sim_utils.UrdfConverterCfg.JointDriveCfg.PDGainsCfg(
+            stiffness=0, damping=0
+        )
     ),
 )
 _ALEX_INIT_STATE_CFG = ArticulationCfg.InitialStateCfg(
@@ -402,7 +438,14 @@ ALEX_V1_NUBS_DEFAULT_CFG = ArticulationCfg(
         "legs": DelayedPDActuatorCfg(
             min_delay=math.floor(MIN_DELAY_DT / SIM_DT),
             max_delay=math.ceil(MAX_DELAY_DT / SIM_DT),
-            joint_names_expr=[".*HIP_X", ".*HIP_Z", ".*HIP_Y", ".*KNEE_Y", ".*ANKLE_Y", ".*ANKLE_X"],
+            joint_names_expr=[
+                ".*HIP_X",
+                ".*HIP_Z",
+                ".*HIP_Y",
+                ".*KNEE_Y",
+                ".*ANKLE_Y",
+                ".*ANKLE_X",
+            ],
             stiffness={
                 ".*HIP_X": STIFFNESS_85_HIP_X,
                 ".*HIP_Z": STIFFNESS_68_HIP_Z,
@@ -477,7 +520,12 @@ ALEX_V1_NUBS_DEFAULT_CFG = ArticulationCfg(
         "arms": DelayedPDActuatorCfg(
             min_delay=math.floor(MIN_DELAY_DT / SIM_DT),
             max_delay=math.ceil(MAX_DELAY_DT / SIM_DT),
-            joint_names_expr=[".*SHOULDER_Y", ".*SHOULDER_X", ".*SHOULDER_Z", ".*ELBOW_Y"],
+            joint_names_expr=[
+                ".*SHOULDER_Y",
+                ".*SHOULDER_X",
+                ".*SHOULDER_Z",
+                ".*ELBOW_Y",
+            ],
             stiffness={
                 ".*SHOULDER_Y": STIFFNESS_85_SHOULDER_Y,
                 ".*SHOULDER_X": STIFFNESS_85_SHOULDER_X,
@@ -611,11 +659,16 @@ _ABILITY_HAND_INDEPENDENT_JOINT_SUFFIXES = [
 
 
 def ability_hand_independent_joint_names(side: str) -> list[str]:
-    return [f"{side}_ability_hand_{suffix}" for suffix in _ABILITY_HAND_INDEPENDENT_JOINT_SUFFIXES]
+    return [
+        f"{side}_ability_hand_{suffix}"
+        for suffix in _ABILITY_HAND_INDEPENDENT_JOINT_SUFFIXES
+    ]
 
 
 def ability_hand_full_joint_names(side: str) -> list[str]:
-    return [joint for joint in ABILITY_HAND_JOINT_NAMES_LIST if joint.startswith(f"{side}_")]
+    return [
+        joint for joint in ABILITY_HAND_JOINT_NAMES_LIST if joint.startswith(f"{side}_")
+    ]
 
 
 # Left/right wrist pose keys emitted by Se3AbsRetargeter (7 floats each: xyz + quat xyzw).
@@ -690,7 +743,22 @@ ALEX_ABILITY_HAND_WRIST_ACTION_DIM = len(ALEX_ABILITY_HAND_LEFT_EE_ACTION_KEYS) 
     ALEX_ABILITY_HAND_RIGHT_EE_ACTION_KEYS
 )
 ALEX_ABILITY_HAND_HAND_ACTION_DIM = len(ABILITY_HAND_TELEOP_JOINT_ORDER)
-ALEX_ABILITY_HAND_TOTAL_ACTION_DIM = ALEX_ABILITY_HAND_WRIST_ACTION_DIM + ALEX_ABILITY_HAND_HAND_ACTION_DIM
+TEST_OBS_NEW_ACTION_DIM = 46
+TEST_OBS_NEW_STATE_DIM = 48
+TEST_OBS_NEW_GROUPED_HAND_NAMES = [
+    f"{side}_ability_hand_{finger}_{joint}"
+    for side in ("left", "right")
+    for finger in ("index", "middle", "ring", "pinky", "thumb")
+    for joint in ("q1", "q2")
+]
+TEST_OBS_NEW_GROUPED_FROM_PINK = [
+    ABILITY_HAND_TELEOP_JOINT_ORDER.index(name)
+    for name in TEST_OBS_NEW_GROUPED_HAND_NAMES
+]
+TEST_OBS_NEW_PINK_FROM_GROUPED = np.argsort(TEST_OBS_NEW_GROUPED_FROM_PINK).tolist()
+ALEX_ABILITY_HAND_TOTAL_ACTION_DIM = (
+    ALEX_ABILITY_HAND_WRIST_ACTION_DIM + ALEX_ABILITY_HAND_HAND_ACTION_DIM
+)
 ALEX_ABILITY_HAND_PER_HAND_GRIPPER_DIM = 10
 
 # Indices within the 20-dim teleop hand block for each mimic per-eef gripper vector.
@@ -698,12 +766,18 @@ _ABILITY_HAND_LEFT_GRIPPER_TELEOP_INDICES = (0, 1, 2, 3, 8, 10, 11, 12, 13, 18)
 _ABILITY_HAND_RIGHT_GRIPPER_TELEOP_INDICES = (4, 5, 6, 7, 9, 14, 15, 16, 17, 19)
 
 
-def _pack_ability_hand_teleop_block(left_hand: torch.Tensor, right_hand: torch.Tensor) -> torch.Tensor:
+def _pack_ability_hand_teleop_block(
+    left_hand: torch.Tensor, right_hand: torch.Tensor
+) -> torch.Tensor:
     """Pack per-hand mimic gripper vectors into ``ABILITY_HAND_TELEOP_JOINT_ORDER`` layout."""
     assert left_hand.shape[-1] == ALEX_ABILITY_HAND_PER_HAND_GRIPPER_DIM
     assert right_hand.shape[-1] == ALEX_ABILITY_HAND_PER_HAND_GRIPPER_DIM
     if left_hand.ndim == 1:
-        hand_block = torch.zeros(ALEX_ABILITY_HAND_HAND_ACTION_DIM, device=left_hand.device, dtype=left_hand.dtype)
+        hand_block = torch.zeros(
+            ALEX_ABILITY_HAND_HAND_ACTION_DIM,
+            device=left_hand.device,
+            dtype=left_hand.dtype,
+        )
         hand_block[list(_ABILITY_HAND_LEFT_GRIPPER_TELEOP_INDICES)] = left_hand
         hand_block[list(_ABILITY_HAND_RIGHT_GRIPPER_TELEOP_INDICES)] = right_hand
         return hand_block
@@ -719,7 +793,9 @@ def _pack_ability_hand_teleop_block(left_hand: torch.Tensor, right_hand: torch.T
     return hand_block
 
 
-def _unpack_ability_hand_gripper_actions(actions: torch.Tensor) -> dict[str, torch.Tensor]:
+def _unpack_ability_hand_gripper_actions(
+    actions: torch.Tensor,
+) -> dict[str, torch.Tensor]:
     """Split a teleop action tensor into per-hand mimic gripper vectors."""
     hand_block = actions[..., ALEX_ABILITY_HAND_WRIST_ACTION_DIM:]
     return {
@@ -734,7 +810,9 @@ def build_alex_ability_hand_teleop_action_order() -> list[str]:
     Layout: [left_wrist(7), right_wrist(7), hand_joints(20)] = 34 total.
     """
     return (
-        ALEX_ABILITY_HAND_LEFT_EE_ACTION_KEYS + ALEX_ABILITY_HAND_RIGHT_EE_ACTION_KEYS + ABILITY_HAND_TELEOP_JOINT_ORDER
+        ALEX_ABILITY_HAND_LEFT_EE_ACTION_KEYS
+        + ALEX_ABILITY_HAND_RIGHT_EE_ACTION_KEYS
+        + ABILITY_HAND_TELEOP_JOINT_ORDER
     )
 
 
@@ -746,7 +824,9 @@ def _merge_ability_hands_urdf(robot_version: str) -> str:
     output_name = f"alex_{ver}_ability_hands_arena"
     urdf_dir = _alex_urdf_dir(robot_version)
     temp_name = "_temp_" + output_name
-    merged_path = merge_urdfs(robot_version, ALEX_ABILITY_HANDS_PARTS, output_name=temp_name)
+    merged_path = merge_urdfs(
+        robot_version, ALEX_ABILITY_HANDS_PARTS, output_name=temp_name
+    )
 
     tree = etree.parse(merged_path)
     base_robot = tree.getroot()
@@ -761,7 +841,10 @@ def _merge_ability_hands_urdf(robot_version: str) -> str:
                 link.remove(collision)
 
     hand_urdf_dir = os.path.join(_ABILITY_HAND_MODELS_DIR, "urdf", "abilityHand")
-    for hand_urdf_name in ["ability_hand_left_large.urdf", "ability_hand_right_large.urdf"]:
+    for hand_urdf_name in [
+        "ability_hand_left_large.urdf",
+        "ability_hand_right_large.urdf",
+    ]:
         hand_path = os.path.join(hand_urdf_dir, hand_urdf_name)
         assert os.path.isfile(hand_path), (
             f"Ability Hand URDF not found: {hand_path}\n"
@@ -781,8 +864,15 @@ def _merge_ability_hands_urdf(robot_version: str) -> str:
 
 def _resolve_standalone_hand_urdf(side: str, robot_version: str = ALEX_V1) -> str:
     """Resolve ``package://abilityHand/`` paths in a standalone hand URDF for dex-retargeting."""
-    src_path = os.path.join(_ABILITY_HAND_MODELS_DIR, "urdf", "abilityHand", f"ability_hand_{side}_large.urdf")
-    output_path = os.path.join(_alex_urdf_dir(robot_version), f"ability_hand_{side}_large_resolved.urdf")
+    src_path = os.path.join(
+        _ABILITY_HAND_MODELS_DIR,
+        "urdf",
+        "abilityHand",
+        f"ability_hand_{side}_large.urdf",
+    )
+    output_path = os.path.join(
+        _alex_urdf_dir(robot_version), f"ability_hand_{side}_large_resolved.urdf"
+    )
     marker = f"<!-- hands_dir={_ABILITY_HAND_MODELS_DIR},side={side},robot_version={robot_version} -->"
 
     if (
@@ -838,9 +928,13 @@ ALEX_TELEOP_ARM_STIFFNESS = float(os.environ.get("ALEX_TELEOP_ARM_STIFFNESS", "6
 ALEX_TELEOP_ARM_DAMPING = float(os.environ.get("ALEX_TELEOP_ARM_DAMPING", "100.0"))
 
 
-def _configure_teleop_arm_actuators(robot_cfg: ArticulationCfg, include_wrists: bool) -> None:
+def _configure_teleop_arm_actuators(
+    robot_cfg: ArticulationCfg, include_wrists: bool
+) -> None:
     joint_expr = (
-        [".*SHOULDER.*", ".*ELBOW.*", ".*WRIST.*", ".*GRIPPER.*"] if include_wrists else [".*SHOULDER.*", ".*ELBOW.*"]
+        [".*SHOULDER.*", ".*ELBOW.*", ".*WRIST.*", ".*GRIPPER.*"]
+        if include_wrists
+        else [".*SHOULDER.*", ".*ELBOW.*"]
     )
     robot_cfg.actuators["arms"] = ImplicitActuatorCfg(
         joint_names_expr=joint_expr,
@@ -868,8 +962,12 @@ def _configure_policy_arm_actuators(robot_cfg: ArticulationCfg) -> None:
 # position, so the hand never applies the push-back torque needed to actually depress a handle or
 # swing a door open. Raise stiffness for position holding; use an unlimited effort cap so the PD
 # can resist push-back torques instead of saturating and yielding.
-ALEX_ABILITY_HAND_EFFORT_LIMIT = float(os.environ.get("ALEX_ABILITY_HAND_EFFORT_LIMIT", "inf"))
-ALEX_ABILITY_HAND_STIFFNESS = float(os.environ.get("ALEX_ABILITY_HAND_STIFFNESS", "3000.0"))
+ALEX_ABILITY_HAND_EFFORT_LIMIT = float(
+    os.environ.get("ALEX_ABILITY_HAND_EFFORT_LIMIT", "inf")
+)
+ALEX_ABILITY_HAND_STIFFNESS = float(
+    os.environ.get("ALEX_ABILITY_HAND_STIFFNESS", "3000.0")
+)
 ALEX_ABILITY_HAND_DAMPING = float(os.environ.get("ALEX_ABILITY_HAND_DAMPING", "100.0"))
 
 
@@ -893,8 +991,12 @@ def _configure_ability_hand_robot(
     """Build robot cfg and resolved/pink-ik URDF paths for ability-hand embodiments."""
     paths = _alex_arena_urdf_paths(robot_version)
     merged_urdf = _merge_ability_hands_urdf(robot_version)
-    resolved_urdf = _resolve_mesh_paths(merged_urdf, paths["ability_hands_resolved"], robot_version)
-    pink_ik_urdf = _strip_collisions_for_pink_ik(resolved_urdf, paths["ability_hands_pink_ik"])
+    resolved_urdf = _resolve_mesh_paths(
+        merged_urdf, paths["ability_hands_resolved"], robot_version
+    )
+    pink_ik_urdf = _strip_collisions_for_pink_ik(
+        resolved_urdf, paths["ability_hands_pink_ik"]
+    )
 
     robot_cfg = _default_nubs_cfg(robot_version)
     robot_cfg.prim_path = "{ENV_REGEX_NS}/Robot"
@@ -997,7 +1099,10 @@ _ALEX_CAPTURY_ANCHOR_BODY_NAME = "TORSO_LINK"
 # elbow-joint link; the shoulder link supplies the upper-arm length used to place
 # it. PELVIS is the IK base frame.
 ALEX_ELBOW_LINK_NAMES = {"left": "LEFT_ELBOW_Y_LINK", "right": "RIGHT_ELBOW_Y_LINK"}
-ALEX_SHOULDER_LINK_NAMES = {"left": "LEFT_SHOULDER_Z_LINK", "right": "RIGHT_SHOULDER_Z_LINK"}
+ALEX_SHOULDER_LINK_NAMES = {
+    "left": "LEFT_SHOULDER_Z_LINK",
+    "right": "RIGHT_SHOULDER_Z_LINK",
+}
 ALEX_PELVIS_LINK_NAME = "PELVIS_LINK"
 # Cost of the elbow position task relative to the wrist task (position_cost 8).
 # Low enough that wrist tracking stays primary; high enough to resolve the
@@ -1054,7 +1159,10 @@ def apply_alex_elbow_ik_targets(
     """
     import pinocchio as pin
 
-    from isaaclab_arena.teleop.captury.captury_skeleton import CapturyArmTrackingHints, elbow_target_in_base_frame
+    from isaaclab_arena.teleop.captury.captury_skeleton import (
+        CapturyArmTrackingHints,
+        elbow_target_in_base_frame,
+    )
 
     try:
         ik_term = env.action_manager.get_term(ik_term_name)
@@ -1065,15 +1173,26 @@ def apply_alex_elbow_ik_targets(
     robot = env.scene["robot"]
     try:
         pelvis_idx = int(robot.find_bodies([ALEX_PELVIS_LINK_NAME])[0][0])
-        shoulder_idx = {side: int(robot.find_bodies([name])[0][0]) for side, name in ALEX_SHOULDER_LINK_NAMES.items()}
-        elbow_idx = {side: int(robot.find_bodies([name])[0][0]) for side, name in ALEX_ELBOW_LINK_NAMES.items()}
+        shoulder_idx = {
+            side: int(robot.find_bodies([name])[0][0])
+            for side, name in ALEX_SHOULDER_LINK_NAMES.items()
+        }
+        elbow_idx = {
+            side: int(robot.find_bodies([name])[0][0])
+            for side, name in ALEX_ELBOW_LINK_NAMES.items()
+        }
     except Exception:
         return
 
     body_pos_w = wp.to_torch(robot.data.body_pos_w)[0]
     body_quat_w = wp.to_torch(robot.data.body_quat_w)[0]
     pelvis_pos = body_pos_w[pelvis_idx].cpu().numpy().astype(np.float64)
-    pelvis_rot = PoseUtils.matrix_from_quat(body_quat_w[pelvis_idx]).cpu().numpy().astype(np.float64)
+    pelvis_rot = (
+        PoseUtils.matrix_from_quat(body_quat_w[pelvis_idx])
+        .cpu()
+        .numpy()
+        .astype(np.float64)
+    )
     pelvis_rot_inv = pelvis_rot.T
 
     targets_in_base: dict[str, np.ndarray] = {}
@@ -1100,7 +1219,9 @@ def apply_alex_elbow_ik_targets(
     for ik_controller in ik_controllers:
         for task in ik_controller.cfg.fixed_input_tasks:
             frame = getattr(task, "frame", None)
-            side = next((s for s, name in ALEX_ELBOW_LINK_NAMES.items() if name == frame), None)
+            side = next(
+                (s for s, name in ALEX_ELBOW_LINK_NAMES.items() if name == frame), None
+            )
             if side is None:
                 continue
             task.set_target(pin.SE3(rotations_in_base[side], targets_in_base[side]))
@@ -1143,11 +1264,15 @@ def stabilize_alex_ability_hand_teleop_action(
     action = action.clone()
 
     # body_quat_w and the wrist action blocks are both (x, y, z, w).
-    def _hold_wrist(block_start: int, cur_pos: torch.Tensor, cur_quat_xyzw: torch.Tensor) -> None:
+    def _hold_wrist(
+        block_start: int, cur_pos: torch.Tensor, cur_quat_xyzw: torch.Tensor
+    ) -> None:
         action[block_start : block_start + 3] = cur_pos
         action[block_start + 3 : block_start + 7] = cur_quat_xyzw
 
-    def _stabilize_wrist(block_start: int, cur_pos: torch.Tensor, cur_quat_xyzw: torch.Tensor) -> None:
+    def _stabilize_wrist(
+        block_start: int, cur_pos: torch.Tensor, cur_quat_xyzw: torch.Tensor
+    ) -> None:
         if force_hold_wrists:
             _hold_wrist(block_start, cur_pos, cur_quat_xyzw)
             return
@@ -1180,7 +1305,9 @@ def _ability_hand_close_caps(fraction: float) -> torch.Tensor:
     if cap is None:
         lowers, uppers = [], []
         for name in ABILITY_HAND_TELEOP_JOINT_ORDER:
-            lower, upper = _ABILITY_HAND_JOINT_LIMITS_BY_SUFFIX[name.split("_ability_hand_")[1]]
+            lower, upper = _ABILITY_HAND_JOINT_LIMITS_BY_SUFFIX[
+                name.split("_ability_hand_")[1]
+            ]
             lowers.append(lower)
             uppers.append(upper)
         lowers_t = torch.tensor(lowers, dtype=torch.float32)
@@ -1190,7 +1317,9 @@ def _ability_hand_close_caps(fraction: float) -> torch.Tensor:
     return cap
 
 
-def clamp_ability_hand_close_fraction(action: torch.Tensor, fraction: float) -> torch.Tensor:
+def clamp_ability_hand_close_fraction(
+    action: torch.Tensor, fraction: float
+) -> torch.Tensor:
     """Cap the hand-joint block so the ability hand cannot close past ``fraction``.
 
     The closing direction is the joint's upper limit for every ability-hand
@@ -1201,13 +1330,17 @@ def clamp_ability_hand_close_fraction(action: torch.Tensor, fraction: float) -> 
         return action
     start = ALEX_ABILITY_HAND_WRIST_ACTION_DIM
     end = start + ALEX_ABILITY_HAND_HAND_ACTION_DIM
-    caps = _ability_hand_close_caps(fraction).to(device=action.device, dtype=action.dtype)
+    caps = _ability_hand_close_caps(fraction).to(
+        device=action.device, dtype=action.dtype
+    )
     action = action.clone()
     action[start:end] = torch.minimum(action[start:end], caps)
     return action
 
 
-_ABILITY_HAND_IS_LEFT_JOINT = torch.tensor([name.startswith("left_") for name in ABILITY_HAND_TELEOP_JOINT_ORDER])
+_ABILITY_HAND_IS_LEFT_JOINT = torch.tensor(
+    [name.startswith("left_") for name in ABILITY_HAND_TELEOP_JOINT_ORDER]
+)
 
 
 def build_ability_hand_joint_action(
@@ -1223,12 +1356,17 @@ def build_ability_hand_joint_action(
     """
     caps_left = _ability_hand_close_caps(left_close_fraction)
     caps_right = _ability_hand_close_caps(right_close_fraction)
-    return torch.where(_ABILITY_HAND_IS_LEFT_JOINT, caps_left, caps_right).to(device=device)
+    return torch.where(_ABILITY_HAND_IS_LEFT_JOINT, caps_left, caps_right).to(
+        device=device
+    )
 
 
 _ABILITY_HAND_THUMB_JOINT_SUFFIXES = ("thumb_q1", "thumb_q2")
 _ABILITY_HAND_IS_THUMB_JOINT = torch.tensor(
-    [name.endswith(_ABILITY_HAND_THUMB_JOINT_SUFFIXES) for name in ABILITY_HAND_TELEOP_JOINT_ORDER]
+    [
+        name.endswith(_ABILITY_HAND_THUMB_JOINT_SUFFIXES)
+        for name in ABILITY_HAND_TELEOP_JOINT_ORDER
+    ]
 )
 
 
@@ -1244,7 +1382,9 @@ def build_ability_hand_thumbs_up_action(
     grasp — for scripted pushes where the thumb should stay clear of the
     contact surface rather than curl into it.
     """
-    closed = build_ability_hand_joint_action(left_close_fraction, right_close_fraction, device=device)
+    closed = build_ability_hand_joint_action(
+        left_close_fraction, right_close_fraction, device=device
+    )
     open_hand = build_ability_hand_joint_action(0.0, 0.0, device=device)
     thumb_mask = _ABILITY_HAND_IS_THUMB_JOINT.to(device=device)
     return torch.where(thumb_mask, open_hand, closed)
@@ -1293,8 +1433,20 @@ class AlexTeleopEmbodimentMixin:
         except Exception:
             return None
 
-        pos = wp.to_torch(robot.data.body_pos_w)[0, torso_idx].detach().cpu().numpy().astype(np.float64)
-        quat_xyzw = wp.to_torch(robot.data.body_quat_w)[0, torso_idx].detach().cpu().numpy().astype(np.float64)
+        pos = (
+            wp.to_torch(robot.data.body_pos_w)[0, torso_idx]
+            .detach()
+            .cpu()
+            .numpy()
+            .astype(np.float64)
+        )
+        quat_xyzw = (
+            wp.to_torch(robot.data.body_quat_w)[0, torso_idx]
+            .detach()
+            .cpu()
+            .numpy()
+            .astype(np.float64)
+        )
         if not np.isfinite(pos).all() or not np.isfinite(quat_xyzw).all():
             return None
         if float(np.linalg.norm(quat_xyzw)) < 1e-6:
@@ -1330,7 +1482,9 @@ class AlexPinkEmbodiment(AlexTeleopEmbodimentMixin, EmbodimentBase):
         super().__init__(enable_cameras, initial_pose)
         self._init_pink_embodiment(enable_cameras, use_tiled_camera)
 
-    def _init_pink_embodiment(self, enable_cameras: bool, use_tiled_camera: bool) -> None:
+    def _init_pink_embodiment(
+        self, enable_cameras: bool, use_tiled_camera: bool
+    ) -> None:
         paths = _alex_arena_urdf_paths(self.robot_version)
         ver = self.robot_version.lower()
         merged_urdf = merge_urdfs(
@@ -1338,7 +1492,9 @@ class AlexPinkEmbodiment(AlexTeleopEmbodimentMixin, EmbodimentBase):
             ALEX_NUBFOREARMS_PARTS,
             output_name=f"alex_{ver}_nubs_arena",
         )
-        resolved_urdf = _resolve_mesh_paths(merged_urdf, paths["nubs_resolved"], self.robot_version)
+        resolved_urdf = _resolve_mesh_paths(
+            merged_urdf, paths["nubs_resolved"], self.robot_version
+        )
 
         robot_cfg = _default_nubs_cfg(self.robot_version)
         robot_cfg.prim_path = "{ENV_REGEX_NS}/Robot"
@@ -1354,12 +1510,16 @@ class AlexPinkEmbodiment(AlexTeleopEmbodimentMixin, EmbodimentBase):
         self.scene_config.robot = robot_cfg
 
         self.action_config = AlexActionsCfg()
-        pink_ik_urdf = _strip_collisions_for_pink_ik(resolved_urdf, paths["nubs_pink_ik"])
+        pink_ik_urdf = _strip_collisions_for_pink_ik(
+            resolved_urdf, paths["nubs_pink_ik"]
+        )
         self.action_config.upper_body_ik.controller.urdf_path = pink_ik_urdf
         self.action_config.upper_body_ik.controller.mesh_path = _ALEX_MODELS_DIR
 
         self.observation_config = AlexObservationsCfg()
-        self.observation_config.policy.concatenate_terms = self.concatenate_observation_terms
+        self.observation_config.policy.concatenate_terms = (
+            self.concatenate_observation_terms
+        )
         self.event_config = AlexEventCfg()
         _configure_camera_events(self.event_config, enable_cameras)
 
@@ -1483,14 +1643,26 @@ class AlexObservationsCfg:
             func=base_mdp.joint_pos,
             params={"asset_cfg": SceneEntityCfg("robot")},
         )
-        robot_root_pos = ObsTerm(func=base_mdp.root_pos_w, params={"asset_cfg": SceneEntityCfg("robot")})
-        robot_root_rot = ObsTerm(func=base_mdp.root_quat_w, params={"asset_cfg": SceneEntityCfg("robot")})
+        robot_root_pos = ObsTerm(
+            func=base_mdp.root_pos_w, params={"asset_cfg": SceneEntityCfg("robot")}
+        )
+        robot_root_rot = ObsTerm(
+            func=base_mdp.root_quat_w, params={"asset_cfg": SceneEntityCfg("robot")}
+        )
         robot_links_state = ObsTerm(func=mdp.get_all_robot_link_state)
 
-        left_eef_pos = ObsTerm(func=mdp.get_eef_pos, params={"link_name": "LEFT_ELBOW_Y_LINK"})
-        left_eef_quat = ObsTerm(func=mdp.get_eef_quat, params={"link_name": "LEFT_ELBOW_Y_LINK"})
-        right_eef_pos = ObsTerm(func=mdp.get_eef_pos, params={"link_name": "RIGHT_ELBOW_Y_LINK"})
-        right_eef_quat = ObsTerm(func=mdp.get_eef_quat, params={"link_name": "RIGHT_ELBOW_Y_LINK"})
+        left_eef_pos = ObsTerm(
+            func=mdp.get_eef_pos, params={"link_name": "LEFT_ELBOW_Y_LINK"}
+        )
+        left_eef_quat = ObsTerm(
+            func=mdp.get_eef_quat, params={"link_name": "LEFT_ELBOW_Y_LINK"}
+        )
+        right_eef_pos = ObsTerm(
+            func=mdp.get_eef_pos, params={"link_name": "RIGHT_ELBOW_Y_LINK"}
+        )
+        right_eef_quat = ObsTerm(
+            func=mdp.get_eef_quat, params={"link_name": "RIGHT_ELBOW_Y_LINK"}
+        )
 
         def __post_init__(self):
             self.enable_corruption = False
@@ -1516,7 +1688,10 @@ def sync_alex_zed_cameras(env: ManagerBasedEnv, env_ids: torch.Tensor) -> None:
     """Track ZED cameras to the kinematic HEAD_LINK body each step."""
     if env_ids is None:
         return
-    if "zed_left_cam" not in env.scene.sensors or "robot" not in env.scene.articulations:
+    if (
+        "zed_left_cam" not in env.scene.sensors
+        or "robot" not in env.scene.articulations
+    ):
         return
 
     robot = env.scene["robot"]
@@ -1529,10 +1704,18 @@ def sync_alex_zed_cameras(env: ManagerBasedEnv, env_ids: torch.Tensor) -> None:
         ("zed_left_cam", _ZED_LEFT_CAM_OFFSET),
         ("zed_right_cam", _ZED_RIGHT_CAM_OFFSET),
     ):
-        offset_pos = torch.tensor(offset.position_xyz, device=env.device, dtype=torch.float32).repeat(len(env_ids), 1)
-        offset_quat = torch.tensor(offset.rotation_xyzw, device=env.device, dtype=torch.float32).repeat(len(env_ids), 1)
-        cam_pos, cam_quat = PoseUtils.combine_frame_transforms(head_pos, head_quat, offset_pos, offset_quat)
-        env.scene[cam_name].set_world_poses(cam_pos, cam_quat, env_ids, convention="opengl")
+        offset_pos = torch.tensor(
+            offset.position_xyz, device=env.device, dtype=torch.float32
+        ).repeat(len(env_ids), 1)
+        offset_quat = torch.tensor(
+            offset.rotation_xyzw, device=env.device, dtype=torch.float32
+        ).repeat(len(env_ids), 1)
+        cam_pos, cam_quat = PoseUtils.combine_frame_transforms(
+            head_pos, head_quat, offset_pos, offset_quat
+        )
+        env.scene[cam_name].set_world_poses(
+            cam_pos, cam_quat, env_ids, convention="opengl"
+        )
 
 
 def apply_high_friction_to_ability_hand_fingers(
@@ -1576,7 +1759,10 @@ def apply_high_friction_to_ability_hand_fingers(
             if not any(marker in prim_path_lower for marker in prim_name_markers):
                 continue
             applied_schemas = set(prim.GetAppliedSchemas())
-            has_collision_api = prim.HasAPI(UsdPhysics.CollisionAPI) or "PhysicsCollisionAPI" in applied_schemas
+            has_collision_api = (
+                prim.HasAPI(UsdPhysics.CollisionAPI)
+                or "PhysicsCollisionAPI" in applied_schemas
+            )
             if not has_collision_api:
                 continue
 
@@ -1599,7 +1785,9 @@ def apply_high_friction_to_ability_hand_fingers(
 class AlexMimicEnv(ManagerBasedRLMimicEnv):
     """Mimic environment for Alex — arms-only manipulation (no gripper)."""
 
-    def get_robot_eef_pose(self, eef_name: str, env_ids: Sequence[int] | None = None) -> torch.Tensor:
+    def get_robot_eef_pose(
+        self, eef_name: str, env_ids: Sequence[int] | None = None
+    ) -> torch.Tensor:
         if env_ids is None:
             env_ids = slice(None)
 
@@ -1628,7 +1816,9 @@ class AlexMimicEnv(ManagerBasedRLMimicEnv):
 
         return torch.cat((left_pos, left_quat, right_pos, right_quat), dim=0)
 
-    def action_to_target_eef_pose(self, action: torch.Tensor) -> dict[str, torch.Tensor]:
+    def action_to_target_eef_pose(
+        self, action: torch.Tensor
+    ) -> dict[str, torch.Tensor]:
         left_pos = action[:, 0:3]
         left_rot = PoseUtils.matrix_from_quat(action[:, 3:7])
         right_pos = action[:, 7:10]
@@ -1638,7 +1828,9 @@ class AlexMimicEnv(ManagerBasedRLMimicEnv):
             "right": PoseUtils.make_pose(right_pos, right_rot),
         }
 
-    def actions_to_gripper_actions(self, actions: torch.Tensor) -> dict[str, torch.Tensor]:
+    def actions_to_gripper_actions(
+        self, actions: torch.Tensor
+    ) -> dict[str, torch.Tensor]:
         # Alex has no gripper — return empty tensors.
         empty = torch.zeros(actions.shape[0], 0, device=actions.device)
         return {"left": empty, "right": empty}
@@ -1647,9 +1839,46 @@ class AlexMimicEnv(ManagerBasedRLMimicEnv):
         if env_ids is None:
             env_ids = slice(None)
         state = self.scene.get_state(is_relative=True)
-        return get_rigid_and_articulated_object_poses(state, env_ids)
+        object_poses = get_rigid_and_articulated_object_poses(state, env_ids)
 
-    def get_subtask_term_signals(self, env_ids: Sequence[int] | None = None) -> dict[str, torch.Tensor]:
+        object_refs = {
+            subtask.object_ref
+            for subtask_configs in self.cfg.subtask_configs.values()
+            for subtask in subtask_configs
+            if subtask.object_ref is not None
+        }
+        for object_name in object_refs - set(object_poses):
+            if object_name not in self.scene.keys():
+                continue
+            scene_object = self.scene[object_name]
+            pos = quat = None
+            if hasattr(scene_object, "get_world_poses"):
+                pos_w, quat_w = scene_object.get_world_poses()
+                if pos_w.shape[0] > 0:
+                    pos = pos_w[env_ids].clone()
+                    pos -= self.scene.env_origins[env_ids]
+                    quat = quat_w[env_ids]
+            if pos is None or quat is None:
+                scene_cfg = getattr(self.cfg.scene, object_name, None)
+                init_state = getattr(scene_cfg, "init_state", None)
+                if init_state is None:
+                    continue
+                env_origins = self.scene.env_origins[env_ids]
+                pos = torch.tensor(
+                    init_state.pos, device=self.device, dtype=torch.float32
+                ).repeat(env_origins.shape[0], 1)
+                quat = torch.tensor(
+                    init_state.rot, device=self.device, dtype=torch.float32
+                ).repeat(env_origins.shape[0], 1)
+            object_poses[object_name] = PoseUtils.make_pose(
+                pos, PoseUtils.matrix_from_quat(quat)
+            )
+
+        return object_poses
+
+    def get_subtask_term_signals(
+        self, env_ids: Sequence[int] | None = None
+    ) -> dict[str, torch.Tensor]:
         """Forward the ``subtask_terms`` observation group as subtask-termination signals.
 
         Enables headless (``--auto``) Mimic annotation: the task attaches a ``subtask_terms``
@@ -1663,7 +1892,10 @@ class AlexMimicEnv(ManagerBasedRLMimicEnv):
                 "Auto Mimic annotation requires a 'subtask_terms' observation group; this task does "
                 "not provide one. Use manual annotation (omit --auto) instead."
             )
-        return {name: value[env_ids] for name, value in self.obs_buf["subtask_terms"].items()}
+        return {
+            name: value[env_ids]
+            for name, value in self.obs_buf["subtask_terms"].items()
+        }
 
 
 class AlexAbilityHandMimicEnv(AlexMimicEnv):
@@ -1676,31 +1908,45 @@ class AlexAbilityHandMimicEnv(AlexMimicEnv):
         action_noise_dict: dict | None = None,
         env_id: int = 0,
     ) -> torch.Tensor:
-        target_left_eef_pos, left_target_rot = PoseUtils.unmake_pose(target_eef_pose_dict["left"])
-        target_right_eef_pos, right_target_rot = PoseUtils.unmake_pose(target_eef_pose_dict["right"])
-        target_left_eef_rot_quat = PoseUtils.quat_unique(PoseUtils.quat_from_matrix(left_target_rot))
-        target_right_eef_rot_quat = PoseUtils.quat_unique(PoseUtils.quat_from_matrix(right_target_rot))
+        target_left_eef_pos, left_target_rot = PoseUtils.unmake_pose(
+            target_eef_pose_dict["left"]
+        )
+        target_right_eef_pos, right_target_rot = PoseUtils.unmake_pose(
+            target_eef_pose_dict["right"]
+        )
+        target_left_eef_rot_quat = PoseUtils.quat_unique(
+            PoseUtils.quat_from_matrix(left_target_rot)
+        )
+        target_right_eef_rot_quat = PoseUtils.quat_unique(
+            PoseUtils.quat_from_matrix(right_target_rot)
+        )
 
         left_hand_action = gripper_action_dict["left"]
         right_hand_action = gripper_action_dict["right"]
 
         if action_noise_dict is not None:
-            target_left_eef_pos = target_left_eef_pos + action_noise_dict["left"] * torch.randn_like(
-                target_left_eef_pos
+            target_left_eef_pos = target_left_eef_pos + action_noise_dict[
+                "left"
+            ] * torch.randn_like(target_left_eef_pos)
+            target_right_eef_pos = target_right_eef_pos + action_noise_dict[
+                "right"
+            ] * torch.randn_like(target_right_eef_pos)
+            target_left_eef_rot_quat = target_left_eef_rot_quat + action_noise_dict[
+                "left"
+            ] * torch.randn_like(target_left_eef_rot_quat)
+            target_right_eef_rot_quat = target_right_eef_rot_quat + action_noise_dict[
+                "right"
+            ] * torch.randn_like(target_right_eef_rot_quat)
+            target_left_eef_rot_quat = torch.nn.functional.normalize(
+                target_left_eef_rot_quat, dim=-1
             )
-            target_right_eef_pos = target_right_eef_pos + action_noise_dict["right"] * torch.randn_like(
-                target_right_eef_pos
+            target_right_eef_rot_quat = torch.nn.functional.normalize(
+                target_right_eef_rot_quat, dim=-1
             )
-            target_left_eef_rot_quat = target_left_eef_rot_quat + action_noise_dict["left"] * torch.randn_like(
-                target_left_eef_rot_quat
-            )
-            target_right_eef_rot_quat = target_right_eef_rot_quat + action_noise_dict["right"] * torch.randn_like(
-                target_right_eef_rot_quat
-            )
-            target_left_eef_rot_quat = torch.nn.functional.normalize(target_left_eef_rot_quat, dim=-1)
-            target_right_eef_rot_quat = torch.nn.functional.normalize(target_right_eef_rot_quat, dim=-1)
 
-        hand_block = _pack_ability_hand_teleop_block(left_hand_action, right_hand_action)
+        hand_block = _pack_ability_hand_teleop_block(
+            left_hand_action, right_hand_action
+        )
         return torch.cat(
             (
                 target_left_eef_pos,
@@ -1712,13 +1958,88 @@ class AlexAbilityHandMimicEnv(AlexMimicEnv):
             dim=-1,
         )
 
-    def actions_to_gripper_actions(self, actions: torch.Tensor) -> dict[str, torch.Tensor]:
+    def actions_to_gripper_actions(
+        self, actions: torch.Tensor
+    ) -> dict[str, torch.Tensor]:
         return _unpack_ability_hand_gripper_actions(actions)
 
 
 # ===========================================================================
 # Alex with Psyonic Ability Hands
 # ===========================================================================
+
+
+def test_obs_new_policy_state(env: ManagerBasedEnv) -> torch.Tensor:
+    """Pack live Alex state into the 48-D H2Ozone/test_obs_new layout."""
+    from isaaclab_arena.utils.isaaclab_utils.recorders import test_obs_new_state
+
+    return test_obs_new_state(env)
+
+
+class TestObsNewPinkIKAction(IKFailureTrackingPinkInverseKinematicsAction):
+    """46-D test_obs_new action facade over Alex's 34-D absolute Pink IK controller."""
+
+    def __init__(self, cfg, env):
+        super().__init__(cfg, env)
+        neck_joint_ids, neck_joint_names = self._asset.find_joints(
+            ["NECK_Z", "NECK_Y"], preserve_order=True
+        )
+        self._neck_joint_ids = neck_joint_ids
+        self._neck_joint_names = neck_joint_names
+        self._target_neck_joint_positions = torch.zeros(
+            (self.num_envs, len(neck_joint_ids)), device=self.device
+        )
+
+    @property
+    def action_dim(self) -> int:
+        return TEST_OBS_NEW_ACTION_DIM
+
+    def _extract_neck_joint_targets(self, actions: torch.Tensor) -> torch.Tensor:
+        """Convert test_obs_new's head quaternion action into NECK_Z/NECK_Y targets."""
+        head_quat_xyzw = torch.nn.functional.normalize(
+            actions[:, 22:26], dim=-1, eps=1.0e-6
+        )
+        _, pitch, yaw = PoseUtils.euler_xyz_from_quat(head_quat_xyzw)
+        yaw = torch.clamp(yaw, min=-1.22173, max=1.22173)
+        pitch = torch.clamp(pitch, min=-0.488692, max=0.488692)
+        return torch.stack([yaw, pitch], dim=1)
+
+    def process_actions(self, actions: torch.Tensor) -> None:
+        assert actions.shape[1] == TEST_OBS_NEW_ACTION_DIM, (
+            f"test_obs_new action expects {TEST_OBS_NEW_ACTION_DIM} dims, got {tuple(actions.shape)}"
+        )
+        self._raw_actions[:] = actions
+
+        if self._target_neck_joint_positions.shape[1] == 2:
+            self._target_neck_joint_positions[:] = self._extract_neck_joint_targets(
+                actions
+            )
+
+        hand_grouped = actions[:, 26:46]
+        hand_pink_order = hand_grouped[:, TEST_OBS_NEW_PINK_FROM_GROUPED]
+        hand_resolved_order = hand_pink_order[:, self._hand_joint_permutation]
+        pink_ik_actions = torch.cat([actions[:, :14], hand_resolved_order], dim=1)
+
+        self._target_hand_joint_positions = pink_ik_actions[:, -self.hand_joint_dim :]
+        self.base_link_frame_in_world_rf = self._get_base_link_frame_transform()
+        controlled_frame_poses = self._extract_controlled_frame_poses(pink_ik_actions)
+        transformed_poses = self._transform_poses_to_base_link_frame(controlled_frame_poses)
+        self._set_task_targets(transformed_poses)
+
+    def apply_actions(self) -> None:
+        super().apply_actions()
+        if self._target_neck_joint_positions.numel() > 0:
+            self._asset.set_joint_position_target_index(
+                target=self._target_neck_joint_positions,
+                joint_ids=self._neck_joint_ids,
+            )
+
+
+@configclass
+class TestObsNewPinkIKActionCfg(PinkInverseKinematicsActionCfg):
+    """Action config for policies trained on 46-D test_obs_new actions."""
+
+    class_type: type = TestObsNewPinkIKAction
 
 
 @configclass
@@ -1777,14 +2098,26 @@ class AlexAbilityHandObservationsCfg:
             func=base_mdp.joint_pos,
             params={"asset_cfg": SceneEntityCfg("robot")},
         )
-        robot_root_pos = ObsTerm(func=base_mdp.root_pos_w, params={"asset_cfg": SceneEntityCfg("robot")})
-        robot_root_rot = ObsTerm(func=base_mdp.root_quat_w, params={"asset_cfg": SceneEntityCfg("robot")})
+        robot_root_pos = ObsTerm(
+            func=base_mdp.root_pos_w, params={"asset_cfg": SceneEntityCfg("robot")}
+        )
+        robot_root_rot = ObsTerm(
+            func=base_mdp.root_quat_w, params={"asset_cfg": SceneEntityCfg("robot")}
+        )
         robot_links_state = ObsTerm(func=mdp.get_all_robot_link_state)
 
-        left_eef_pos = ObsTerm(func=mdp.get_eef_pos, params={"link_name": "LEFT_GRIPPER_Z_LINK"})
-        left_eef_quat = ObsTerm(func=mdp.get_eef_quat, params={"link_name": "LEFT_GRIPPER_Z_LINK"})
-        right_eef_pos = ObsTerm(func=mdp.get_eef_pos, params={"link_name": "RIGHT_GRIPPER_Z_LINK"})
-        right_eef_quat = ObsTerm(func=mdp.get_eef_quat, params={"link_name": "RIGHT_GRIPPER_Z_LINK"})
+        left_eef_pos = ObsTerm(
+            func=mdp.get_eef_pos, params={"link_name": "LEFT_GRIPPER_Z_LINK"}
+        )
+        left_eef_quat = ObsTerm(
+            func=mdp.get_eef_quat, params={"link_name": "LEFT_GRIPPER_Z_LINK"}
+        )
+        right_eef_pos = ObsTerm(
+            func=mdp.get_eef_pos, params={"link_name": "RIGHT_GRIPPER_Z_LINK"}
+        )
+        right_eef_quat = ObsTerm(
+            func=mdp.get_eef_quat, params={"link_name": "RIGHT_GRIPPER_Z_LINK"}
+        )
 
         def __post_init__(self):
             self.enable_corruption = False
@@ -1811,17 +2144,46 @@ class AlexAbilityHandRLObservationsCfg:
             func=base_mdp.joint_pos,
             params={"asset_cfg": SceneEntityCfg("robot")},
         )
-        robot_root_pos = ObsTerm(func=base_mdp.root_pos_w, params={"asset_cfg": SceneEntityCfg("robot")})
-        robot_root_rot = ObsTerm(func=base_mdp.root_quat_w, params={"asset_cfg": SceneEntityCfg("robot")})
+        robot_root_pos = ObsTerm(
+            func=base_mdp.root_pos_w, params={"asset_cfg": SceneEntityCfg("robot")}
+        )
+        robot_root_rot = ObsTerm(
+            func=base_mdp.root_quat_w, params={"asset_cfg": SceneEntityCfg("robot")}
+        )
 
-        left_eef_pos = ObsTerm(func=mdp.get_eef_pos, params={"link_name": "LEFT_GRIPPER_Z_LINK"})
-        left_eef_quat = ObsTerm(func=mdp.get_eef_quat, params={"link_name": "LEFT_GRIPPER_Z_LINK"})
-        right_eef_pos = ObsTerm(func=mdp.get_eef_pos, params={"link_name": "RIGHT_GRIPPER_Z_LINK"})
-        right_eef_quat = ObsTerm(func=mdp.get_eef_quat, params={"link_name": "RIGHT_GRIPPER_Z_LINK"})
+        left_eef_pos = ObsTerm(
+            func=mdp.get_eef_pos, params={"link_name": "LEFT_GRIPPER_Z_LINK"}
+        )
+        left_eef_quat = ObsTerm(
+            func=mdp.get_eef_quat, params={"link_name": "LEFT_GRIPPER_Z_LINK"}
+        )
+        right_eef_pos = ObsTerm(
+            func=mdp.get_eef_pos, params={"link_name": "RIGHT_GRIPPER_Z_LINK"}
+        )
+        right_eef_quat = ObsTerm(
+            func=mdp.get_eef_quat, params={"link_name": "RIGHT_GRIPPER_Z_LINK"}
+        )
 
         def __post_init__(self):
             self.enable_corruption = False
             self.concatenate_terms = False
+
+    policy: PolicyCfg = PolicyCfg()
+
+
+@configclass
+class AlexAbilityHandTestObsNewObservationsCfg:
+    """48-D policy observation spec matching H2Ozone/test_obs_new."""
+
+    @configclass
+    class PolicyCfg(ObsGroup):
+        """Single concatenated 48-D observation.state-compatible policy vector."""
+
+        state = ObsTerm(func=test_obs_new_policy_state)
+
+        def __post_init__(self):
+            self.enable_corruption = False
+            self.concatenate_terms = True
 
     policy: PolicyCfg = PolicyCfg()
 
@@ -1847,8 +2209,13 @@ class AlexAbilityHandEmbodiment(AlexTeleopEmbodimentMixin, EmbodimentBase):
         concatenate_observation_terms: bool = False,
         use_teleop_actuators: bool = True,
         use_rl_action_space: bool = False,
+        use_test_obs_new_io: bool = False,
     ):
-        super().__init__(enable_cameras, initial_pose, concatenate_observation_terms=concatenate_observation_terms)
+        super().__init__(
+            enable_cameras,
+            initial_pose,
+            concatenate_observation_terms=concatenate_observation_terms,
+        )
 
         robot_cfg, _resolved_urdf, pink_ik_urdf = _configure_ability_hand_robot(
             self.robot_version,
@@ -1860,7 +2227,15 @@ class AlexAbilityHandEmbodiment(AlexTeleopEmbodimentMixin, EmbodimentBase):
         self.scene_config.robot = robot_cfg
 
         self.action_config = AlexAbilityHandActionsCfg()
-        if use_rl_action_space:
+        if use_test_obs_new_io:
+            self.action_config.upper_body_ik = TestObsNewPinkIKActionCfg(
+                pink_controlled_joint_names=self.action_config.upper_body_ik.pink_controlled_joint_names,
+                hand_joint_names=self.action_config.upper_body_ik.hand_joint_names,
+                target_eef_link_names=self.action_config.upper_body_ik.target_eef_link_names,
+                asset_name=self.action_config.upper_body_ik.asset_name,
+                controller=self.action_config.upper_body_ik.controller,
+            )
+        elif use_rl_action_space:
             # Absolute-pose Pink IK actions are unsafe for a freshly-initialized RL policy (see
             # RLPinkIKAction's docstring); swap in the bounded delta-pose variant, reusing the
             # same controller/joint-name cfg so the two variants stay in lockstep.
@@ -1874,11 +2249,13 @@ class AlexAbilityHandEmbodiment(AlexTeleopEmbodimentMixin, EmbodimentBase):
         self.action_config.upper_body_ik.controller.urdf_path = pink_ik_urdf
         self.action_config.upper_body_ik.controller.mesh_path = None
 
-        if self.concatenate_observation_terms:
+        if use_test_obs_new_io:
+            self.observation_config = AlexAbilityHandTestObsNewObservationsCfg()
+        elif self.concatenate_observation_terms:
             self.observation_config = AlexAbilityHandRLObservationsCfg()
         else:
             self.observation_config = AlexAbilityHandObservationsCfg()
-        self.observation_config.policy.concatenate_terms = self.concatenate_observation_terms
+        self.observation_config.policy.concatenate_terms = use_test_obs_new_io or self.concatenate_observation_terms
         self.event_config = AlexEventCfg()
         _configure_camera_events(self.event_config, enable_cameras)
         self.mimic_env = AlexAbilityHandMimicEnv
@@ -1915,7 +2292,9 @@ class AlexAbilityHandEmbodiment(AlexTeleopEmbodimentMixin, EmbodimentBase):
             },
         )
 
-    def stabilize_teleop_action(self, env: ManagerBasedEnv, action: torch.Tensor) -> torch.Tensor:
+    def stabilize_teleop_action(
+        self, env: ManagerBasedEnv, action: torch.Tensor
+    ) -> torch.Tensor:
         """Clamp ability-hand wrist teleop targets before Pink IK."""
         force_hold_wrists = self._teleop_warmup_steps_remaining > 0
         # The steady-state distance gate exists to catch a startup jump from
@@ -1932,9 +2311,13 @@ class AlexAbilityHandEmbodiment(AlexTeleopEmbodimentMixin, EmbodimentBase):
                 force_hold_wrists=force_hold_wrists,
             )
         else:
-            action = stabilize_alex_ability_hand_teleop_action(env, action, force_hold_wrists=force_hold_wrists)
+            action = stabilize_alex_ability_hand_teleop_action(
+                env, action, force_hold_wrists=force_hold_wrists
+            )
         if self._teleop_max_close_fraction < 1.0:
-            action = clamp_ability_hand_close_fraction(action, self._teleop_max_close_fraction)
+            action = clamp_ability_hand_close_fraction(
+                action, self._teleop_max_close_fraction
+            )
         if self._teleop_warmup_steps_remaining > 0:
             self._teleop_warmup_steps_remaining -= 1
         return action
@@ -1943,9 +2326,13 @@ class AlexAbilityHandEmbodiment(AlexTeleopEmbodimentMixin, EmbodimentBase):
     _teleop_relax_wrist_clamp: bool = False
     _teleop_max_close_fraction: float = 1.0
 
-    def set_teleop_max_close_fraction(self, fraction: float = ALEX_ABILITY_HAND_MAX_CLOSE_FRACTION) -> None:
+    def set_teleop_max_close_fraction(
+        self, fraction: float = ALEX_ABILITY_HAND_MAX_CLOSE_FRACTION
+    ) -> None:
         """Limit how far the ability hand may close during teleop (1.0 = full fist)."""
-        assert 0.0 < fraction <= 1.0, f"close fraction must be in (0, 1], got {fraction}"
+        assert (
+            0.0 < fraction <= 1.0
+        ), f"close fraction must be in (0, 1], got {fraction}"
         self._teleop_max_close_fraction = fraction
 
     def enable_captury_teleop_responsiveness(
@@ -2015,7 +2402,9 @@ class AlexAbilityHandEmbodiment(AlexTeleopEmbodimentMixin, EmbodimentBase):
             )
         self._elbow_tracking_enabled = True
 
-    def apply_teleop_elbow_targets(self, env: ManagerBasedEnv, arm_hints_world: dict[str, object | None]) -> None:
+    def apply_teleop_elbow_targets(
+        self, env: ManagerBasedEnv, arm_hints_world: dict[str, object | None]
+    ) -> None:
         """Drive the elbow IK targets each step from operator arm tracking hints.
 
         No-op unless :meth:`enable_teleop_elbow_tracking` was called.
@@ -2088,7 +2477,11 @@ class AlexAbilityHandJointPositionEmbodiment(EmbodimentBase):
         use_tiled_camera: bool = False,
         concatenate_observation_terms: bool = False,
     ):
-        super().__init__(enable_cameras, initial_pose, concatenate_observation_terms=concatenate_observation_terms)
+        super().__init__(
+            enable_cameras,
+            initial_pose,
+            concatenate_observation_terms=concatenate_observation_terms,
+        )
 
         # Match teleop physics (fixed base, stiff arm tracking) so recorded
         # processed_actions replay faithfully; only the action interface differs.
@@ -2107,7 +2500,9 @@ class AlexAbilityHandJointPositionEmbodiment(EmbodimentBase):
             self.observation_config = AlexAbilityHandRLObservationsCfg()
         else:
             self.observation_config = AlexAbilityHandObservationsCfg()
-        self.observation_config.policy.concatenate_terms = self.concatenate_observation_terms
+        self.observation_config.policy.concatenate_terms = (
+            self.concatenate_observation_terms
+        )
         self.event_config = AlexEventCfg()
         _configure_camera_events(self.event_config, enable_cameras)
         self.camera_config = AlexCameraCfg()

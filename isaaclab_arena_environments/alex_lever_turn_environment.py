@@ -17,13 +17,16 @@ from __future__ import annotations
 
 import argparse
 import math
+import random
 from typing import TYPE_CHECKING
 
 from isaaclab_arena.assets.register import register_environment
 from isaaclab_arena_environments.example_environment_base import ExampleEnvironmentBase
 
 if TYPE_CHECKING:
-    from isaaclab_arena.environments.isaaclab_arena_environment import IsaacLabArenaEnvironment
+    from isaaclab_arena.environments.isaaclab_arena_environment import (
+        IsaacLabArenaEnvironment,
+    )
 
 _DEFAULT_SPAWN_POS = (-0.4, -0.48682, 0.94296)
 _DEFAULT_LEVER_USD = "isaaclab_arena/assets/lever_sim/Lever_revolute.usd"
@@ -37,14 +40,20 @@ class AlexLeverTurnEnvironment(ExampleEnvironmentBase):
 
     def get_env(self, args_cli: argparse.Namespace) -> IsaacLabArenaEnvironment:
         import isaaclab_arena_examples.policy.base_rsl_rl_policy as base_rsl_rl_policy
-        from isaaclab_arena.environments.isaaclab_arena_environment import IsaacLabArenaEnvironment
+        from isaaclab_arena.environments.isaaclab_arena_environment import (
+            IsaacLabArenaEnvironment,
+        )
         from isaaclab_arena.scene.scene import Scene
         from isaaclab_arena.tasks.lever_turn_task import LeverTurnTaskRL
         from isaaclab_arena.utils.pose import Pose
         from isaaclab_arena_environments import lever_scene_builder
 
-        assert len(args_cli.spawn_pos) == 3, f"--spawn_pos needs 3 comma-separated values, got {args_cli.spawn_pos}"
-        assert len(args_cli.usd_pos) == 3, f"--usd_pos needs 3 comma-separated values, got {args_cli.usd_pos}"
+        assert (
+            len(args_cli.spawn_pos) == 3
+        ), f"--spawn_pos needs 3 comma-separated values, got {args_cli.spawn_pos}"
+        assert (
+            len(args_cli.usd_pos) == 3
+        ), f"--usd_pos needs 3 comma-separated values, got {args_cli.usd_pos}"
 
         ground_plane = self.asset_registry.get_asset_by_name("ground_plane")()
         light = self.asset_registry.get_asset_by_name("light")()
@@ -55,8 +64,29 @@ class AlexLeverTurnEnvironment(ExampleEnvironmentBase):
         usd_scale = args_cli.usd_scale
         if tuple(args_cli.usd_pos) == (0.6, 0.0, 0.9):
             usd_pos = lever_scene_builder.LEVER_USD_DEFAULT_POS
-            usd_yaw = lever_scene_builder.LEVER_USD_DEFAULT_YAW if args_cli.usd_yaw == 0.0 else args_cli.usd_yaw
-            usd_scale = lever_scene_builder.LEVER_USD_DEFAULT_SCALE if args_cli.usd_scale == 1.0 else args_cli.usd_scale
+            usd_yaw = (
+                lever_scene_builder.LEVER_USD_DEFAULT_YAW
+                if args_cli.usd_yaw == 0.0
+                else args_cli.usd_yaw
+            )
+            usd_scale = (
+                lever_scene_builder.LEVER_USD_DEFAULT_SCALE
+                if args_cli.usd_scale == 1.0
+                else args_cli.usd_scale
+            )
+        if bool(args_cli.lever_dr) or bool(args_cli.lever_pose_dr):
+            from pathlib import Path
+
+            usd_stem = Path(args_cli.usd).stem.lower()
+            if usd_stem in lever_scene_builder.LEVER_BASE_OBJECT_STEMS:
+                xy_jitter = args_cli.lever_pose_dr_xy_jitter
+                yaw_jitter = args_cli.lever_pose_dr_yaw_jitter_deg
+                usd_pos = (
+                    usd_pos[0] + random.uniform(-xy_jitter, xy_jitter),
+                    usd_pos[1] + random.uniform(-xy_jitter, xy_jitter),
+                    usd_pos[2],
+                )
+                usd_yaw = usd_yaw + random.uniform(-yaw_jitter, yaw_jitter)
 
         lever_assets, lever_object = lever_scene_builder.build_lever_scene_assets(
             usd_path=args_cli.usd,
@@ -68,12 +98,15 @@ class AlexLeverTurnEnvironment(ExampleEnvironmentBase):
         )
 
         mimic_mode = bool(args_cli.mimic)
+        test_obs_new_io = bool(args_cli.test_obs_new_io)
         embodiment = self.asset_registry.get_asset_by_name(args_cli.embodiment)(
+            enable_cameras=args_cli.enable_cameras,
             concatenate_observation_terms=not mimic_mode,
             # Mimic replays absolute wrist poses with the teleop gains. RL uses
             # softer policy gains and bounded delta-pose actions.
-            use_teleop_actuators=mimic_mode,
-            use_rl_action_space=not mimic_mode,
+            use_teleop_actuators=mimic_mode or test_obs_new_io,
+            use_rl_action_space=not mimic_mode and not test_obs_new_io,
+            use_test_obs_new_io=test_obs_new_io,
         )
         half_yaw = math.radians(args_cli.spawn_yaw) / 2.0
         embodiment.set_initial_pose(
@@ -151,6 +184,23 @@ class AlexLeverTurnEnvironment(ExampleEnvironmentBase):
             help="Enable reset-time lever pose jitter and handle-color variation.",
         )
         parser.add_argument(
+            "--lever_pose_dr",
+            action="store_true",
+            help="Enable reset-time lever pose jitter without relying on visual DR flags.",
+        )
+        parser.add_argument(
+            "--lever_pose_dr_xy_jitter",
+            type=float,
+            default=0.01,
+            help="Half-range for reset-time lever x/y jitter in meters (default 0.01).",
+        )
+        parser.add_argument(
+            "--lever_pose_dr_yaw_jitter_deg",
+            type=float,
+            default=5.0,
+            help="Half-range for reset-time lever yaw jitter in degrees (default 5).",
+        )
+        parser.add_argument(
             "--table",
             type=str,
             default="none",
@@ -167,4 +217,9 @@ class AlexLeverTurnEnvironment(ExampleEnvironmentBase):
             type=float,
             default=0.35,
             help="Hinge rotation (rad) from rest for success termination and sparse bonus (default 0.35).",
+        )
+        parser.add_argument(
+            "--test_obs_new_io",
+            action="store_true",
+            help="Expose 48-D test_obs_new policy observations and 46-D test_obs_new actions.",
         )

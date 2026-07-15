@@ -50,12 +50,17 @@ def _as_torch(value) -> torch.Tensor:
     return value if isinstance(value, torch.Tensor) else wp.to_torch(value)
 
 
+def _quat_wxyz_to_xyzw(quat: torch.Tensor) -> torch.Tensor:
+    """Return Isaac body quats in the H2Ozone/test_obs_new xyzw layout."""
+    return quat
+
+
 def _body_pose(env, name: str) -> tuple[torch.Tensor, torch.Tensor]:
     robot = env.unwrapped.scene["robot"]
     ids, _ = robot.find_bodies([name])
     idx = int(ids[0])
     pos = _as_torch(robot.data.body_pos_w)[:, idx] - env.unwrapped.scene.env_origins
-    quat = _as_torch(robot.data.body_quat_w)[:, idx]
+    quat = _quat_wxyz_to_xyzw(_as_torch(robot.data.body_quat_w)[:, idx])
     return pos, quat
 
 
