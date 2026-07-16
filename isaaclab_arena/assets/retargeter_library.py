@@ -73,7 +73,11 @@ def _build_alex_pipeline(hands_source=None):
         hands_source: Optional hands source node (e.g. a Captury source).
             Defaults to the OpenXR DeviceIO ``HandsSource``.
     """
-    from isaacteleop.retargeters import Se3AbsRetargeter, Se3RetargeterConfig, TensorReorderer
+    from isaacteleop.retargeters import (
+        Se3AbsRetargeter,
+        Se3RetargeterConfig,
+        TensorReorderer,
+    )
     from isaacteleop.retargeting_engine.deviceio_source_nodes import HandsSource
     from isaacteleop.retargeting_engine.interface import OutputCombiner, ValueInput
     from isaacteleop.retargeting_engine.tensor_types import TransformMatrix
@@ -94,7 +98,9 @@ def _build_alex_pipeline(hands_source=None):
         ),
         name="left_ee_pose",
     )
-    connected_left_se3 = left_se3.connect({HandsSource.LEFT: transformed_hands.output(HandsSource.LEFT)})
+    connected_left_se3 = left_se3.connect(
+        {HandsSource.LEFT: transformed_hands.output(HandsSource.LEFT)}
+    )
 
     # Right arm: 180° yaw offset — Alex's right EEF frame is 180° rotated from the OpenXR frame.
     right_se3 = Se3AbsRetargeter(
@@ -109,10 +115,28 @@ def _build_alex_pipeline(hands_source=None):
         ),
         name="right_ee_pose",
     )
-    connected_right_se3 = right_se3.connect({HandsSource.RIGHT: transformed_hands.output(HandsSource.RIGHT)})
+    connected_right_se3 = right_se3.connect(
+        {HandsSource.RIGHT: transformed_hands.output(HandsSource.RIGHT)}
+    )
 
-    left_ee_elements = ["l_pos_x", "l_pos_y", "l_pos_z", "l_quat_x", "l_quat_y", "l_quat_z", "l_quat_w"]
-    right_ee_elements = ["r_pos_x", "r_pos_y", "r_pos_z", "r_quat_x", "r_quat_y", "r_quat_z", "r_quat_w"]
+    left_ee_elements = [
+        "l_pos_x",
+        "l_pos_y",
+        "l_pos_z",
+        "l_quat_x",
+        "l_quat_y",
+        "l_quat_z",
+        "l_quat_w",
+    ]
+    right_ee_elements = [
+        "r_pos_x",
+        "r_pos_y",
+        "r_pos_z",
+        "r_quat_x",
+        "r_quat_y",
+        "r_quat_z",
+        "r_quat_w",
+    ]
 
     reorderer = TensorReorderer(
         input_config={
@@ -126,14 +150,18 @@ def _build_alex_pipeline(hands_source=None):
             "right_ee_pose": "array",
         },
     )
-    connected_reorderer = reorderer.connect({
-        "left_ee_pose": connected_left_se3.output("ee_pose"),
-        "right_ee_pose": connected_right_se3.output("ee_pose"),
-    })
+    connected_reorderer = reorderer.connect(
+        {
+            "left_ee_pose": connected_left_se3.output("ee_pose"),
+            "right_ee_pose": connected_right_se3.output("ee_pose"),
+        }
+    )
     return OutputCombiner({"action": connected_reorderer.output("output")})
 
 
-def _build_alex_ability_hands_pipeline(robot_version: str = "V1", hands_source=None, use_captury_finger_flexion=False):
+def _build_alex_ability_hands_pipeline(
+    robot_version: str = "V1", hands_source=None, use_captury_finger_flexion=False
+):
     """Build IsaacTeleop pipeline for Alex with PINK IK wrists and dex hand retargeting.
 
     Output tensor layout: [left_wrist(7), right_wrist(7), hand_joints(20)].
@@ -145,8 +173,7 @@ def _build_alex_ability_hands_pipeline(robot_version: str = "V1", hands_source=N
         use_captury_finger_flexion: When ``True`` (Captury path only), the four
             finger ``q1`` joints are computed by direct bend-angle flexion from
             the hand source instead of DexPilot (whose fingertip optimization is
-            bistable for the ring/pinky on markerless data); the thumb still
-            comes from DexPilot. Leaves the OpenXR path on pure DexPilot.
+            bistable for the ring/pinky on markerless data).
     """
     from isaacteleop.retargeters import (
         DexHandRetargeter,
@@ -159,7 +186,9 @@ def _build_alex_ability_hands_pipeline(robot_version: str = "V1", hands_source=N
     from isaacteleop.retargeting_engine.interface import OutputCombiner, ValueInput
     from isaacteleop.retargeting_engine.tensor_types import TransformMatrix
 
-    from isaaclab_arena.assets.ability_hand_joint_expand_retargeter import AbilityHandJointExpandRetargeter
+    from isaaclab_arena.assets.ability_hand_joint_expand_retargeter import (
+        AbilityHandJointExpandRetargeter,
+    )
     from isaaclab_arena.embodiments.alex.alex import (
         ALEX_ABILITY_HAND_LEFT_EE_ACTION_KEYS,
         ALEX_ABILITY_HAND_RIGHT_EE_ACTION_KEYS,
@@ -185,7 +214,9 @@ def _build_alex_ability_hands_pipeline(robot_version: str = "V1", hands_source=N
         ),
         name="left_ee_pose",
     )
-    connected_left_se3 = left_se3.connect({HandsSource.LEFT: transformed_hands.output(HandsSource.LEFT)})
+    connected_left_se3 = left_se3.connect(
+        {HandsSource.LEFT: transformed_hands.output(HandsSource.LEFT)}
+    )
 
     right_se3 = Se3AbsRetargeter(
         Se3RetargeterConfig(
@@ -199,7 +230,9 @@ def _build_alex_ability_hands_pipeline(robot_version: str = "V1", hands_source=N
         ),
         name="right_ee_pose",
     )
-    connected_right_se3 = right_se3.connect({HandsSource.RIGHT: transformed_hands.output(HandsSource.RIGHT)})
+    connected_right_se3 = right_se3.connect(
+        {HandsSource.RIGHT: transformed_hands.output(HandsSource.RIGHT)}
+    )
 
     operator2mano = (0, -1, 0, -1, 0, 0, 0, 0, -1)
     left_independent_joint_names = ability_hand_independent_joint_names("left")
@@ -209,7 +242,9 @@ def _build_alex_ability_hands_pipeline(robot_version: str = "V1", hands_source=N
 
     left_dex = DexHandRetargeter(
         DexHandRetargeterConfig(
-            hand_retargeting_config=os.path.join(_ABILITY_HAND_DEX_CONFIG_DIR, "ability_hand_left_dexpilot.yml"),
+            hand_retargeting_config=os.path.join(
+                _ABILITY_HAND_DEX_CONFIG_DIR, "ability_hand_left_dexpilot.yml"
+            ),
             hand_urdf=_resolve_standalone_hand_urdf("left", robot_version),
             hand_joint_names=left_independent_joint_names,
             hand_side="left",
@@ -217,11 +252,15 @@ def _build_alex_ability_hands_pipeline(robot_version: str = "V1", hands_source=N
         ),
         name="left_hand_dex",
     )
-    connected_left_dex = left_dex.connect({HandsSource.LEFT: hands.output(HandsSource.LEFT)})
+    connected_left_dex = left_dex.connect(
+        {HandsSource.LEFT: hands.output(HandsSource.LEFT)}
+    )
 
     right_dex = DexHandRetargeter(
         DexHandRetargeterConfig(
-            hand_retargeting_config=os.path.join(_ABILITY_HAND_DEX_CONFIG_DIR, "ability_hand_right_dexpilot.yml"),
+            hand_retargeting_config=os.path.join(
+                _ABILITY_HAND_DEX_CONFIG_DIR, "ability_hand_right_dexpilot.yml"
+            ),
             hand_urdf=_resolve_standalone_hand_urdf("right", robot_version),
             hand_joint_names=right_independent_joint_names,
             hand_side="right",
@@ -229,7 +268,9 @@ def _build_alex_ability_hands_pipeline(robot_version: str = "V1", hands_source=N
         ),
         name="right_hand_dex",
     )
-    connected_right_dex = right_dex.connect({HandsSource.RIGHT: hands.output(HandsSource.RIGHT)})
+    connected_right_dex = right_dex.connect(
+        {HandsSource.RIGHT: hands.output(HandsSource.RIGHT)}
+    )
 
     # Independent-joint source feeding the joint expander. By default this is the
     # raw DexPilot output; on the Captury path the four finger q1 joints are
@@ -238,20 +279,56 @@ def _build_alex_ability_hands_pipeline(robot_version: str = "V1", hands_source=N
     left_hand_joints = connected_left_dex.output("hand_joints")
     right_hand_joints = connected_right_dex.output("hand_joints")
     if use_captury_finger_flexion:
-        from isaaclab_arena.teleop.captury.captury_finger_flexion_retargeter import CapturyFingerFlexionRetargeter
+        from isaaclab_arena.teleop.captury.captury_finger_flexion_retargeter import (
+            CapturyFingerFlexionRetargeter,
+        )
 
-        left_flex = CapturyFingerFlexionRetargeter(left_independent_joint_names, "left", name="left_hand_flexion")
-        connected_left_flex = left_flex.connect({
-            "hand_left": hands.output(HandsSource.LEFT),
-            CapturyFingerFlexionRetargeter.DEX_INPUT: left_hand_joints,
-        })
+        left_flex = CapturyFingerFlexionRetargeter(
+            left_independent_joint_names, "left", name="left_hand_flexion"
+        )
+        connected_left_flex = left_flex.connect(
+            {
+                "hand_left": hands.output(HandsSource.LEFT),
+                CapturyFingerFlexionRetargeter.DEX_INPUT: left_hand_joints,
+            }
+        )
         left_hand_joints = connected_left_flex.output("hand_joints")
 
-        right_flex = CapturyFingerFlexionRetargeter(right_independent_joint_names, "right", name="right_hand_flexion")
-        connected_right_flex = right_flex.connect({
-            "hand_right": hands.output(HandsSource.RIGHT),
-            CapturyFingerFlexionRetargeter.DEX_INPUT: right_hand_joints,
-        })
+        right_flex = CapturyFingerFlexionRetargeter(
+            right_independent_joint_names, "right", name="right_hand_flexion"
+        )
+        connected_right_flex = right_flex.connect(
+            {
+                "hand_right": hands.output(HandsSource.RIGHT),
+                CapturyFingerFlexionRetargeter.DEX_INPUT: right_hand_joints,
+            }
+        )
+        right_hand_joints = connected_right_flex.output("hand_joints")
+    else:
+        from isaaclab_arena.teleop.ability_hand_finger_flexion_retargeter import (
+            AbilityHandFingerFlexionRetargeter,
+        )
+
+        left_flex = AbilityHandFingerFlexionRetargeter(
+            left_independent_joint_names, "left", name="left_hand_flexion"
+        )
+        connected_left_flex = left_flex.connect(
+            {
+                "hand_left": hands.output(HandsSource.LEFT),
+                AbilityHandFingerFlexionRetargeter.DEX_INPUT: left_hand_joints,
+            }
+        )
+        left_hand_joints = connected_left_flex.output("hand_joints")
+
+        right_flex = AbilityHandFingerFlexionRetargeter(
+            right_independent_joint_names, "right", name="right_hand_flexion"
+        )
+        connected_right_flex = right_flex.connect(
+            {
+                "hand_right": hands.output(HandsSource.RIGHT),
+                AbilityHandFingerFlexionRetargeter.DEX_INPUT: right_hand_joints,
+            }
+        )
         right_hand_joints = connected_right_flex.output("hand_joints")
 
     left_expand = AbilityHandJointExpandRetargeter(
@@ -259,18 +336,22 @@ def _build_alex_ability_hands_pipeline(robot_version: str = "V1", hands_source=N
         left_full_joint_names,
         name="left_hand_expand",
     )
-    connected_left_expand = left_expand.connect({
-        "hand_joints": left_hand_joints,
-    })
+    connected_left_expand = left_expand.connect(
+        {
+            "hand_joints": left_hand_joints,
+        }
+    )
 
     right_expand = AbilityHandJointExpandRetargeter(
         right_independent_joint_names,
         right_full_joint_names,
         name="right_hand_expand",
     )
-    connected_right_expand = right_expand.connect({
-        "hand_joints": right_hand_joints,
-    })
+    connected_right_expand = right_expand.connect(
+        {
+            "hand_joints": right_hand_joints,
+        }
+    )
 
     reorderer = TensorReorderer(
         input_config={
@@ -288,12 +369,14 @@ def _build_alex_ability_hands_pipeline(robot_version: str = "V1", hands_source=N
             "right_hand_joints": "scalar",
         },
     )
-    connected_reorderer = reorderer.connect({
-        "left_ee_pose": connected_left_se3.output("ee_pose"),
-        "right_ee_pose": connected_right_se3.output("ee_pose"),
-        "left_hand_joints": connected_left_expand.output("hand_joints"),
-        "right_hand_joints": connected_right_expand.output("hand_joints"),
-    })
+    connected_reorderer = reorderer.connect(
+        {
+            "left_ee_pose": connected_left_se3.output("ee_pose"),
+            "right_ee_pose": connected_right_se3.output("ee_pose"),
+            "left_hand_joints": connected_left_expand.output("hand_joints"),
+            "right_hand_joints": connected_right_expand.output("hand_joints"),
+        }
+    )
     pipeline = OutputCombiner({"action": connected_reorderer.output("output")})
     return pipeline, [left_dex, right_dex]
 
@@ -439,7 +522,9 @@ class G1WbcPinkIsaacTeleopRetargeter(RetargetterBase):
         pass
 
     def get_pipeline_builder(self, embodiment: object) -> Callable:
-        from isaaclab_arena_g1.teleop.g1_pink_locomanipulation_pipeline import _build_g1_pink_locomanipulation_pipeline
+        from isaaclab_arena_g1.teleop.g1_pink_locomanipulation_pipeline import (
+            _build_g1_pink_locomanipulation_pipeline,
+        )
 
         return _build_g1_pink_locomanipulation_pipeline
 
@@ -455,7 +540,9 @@ class G1WbcAgilePinkIsaacTeleopRetargeter(RetargetterBase):
         pass
 
     def get_pipeline_builder(self, embodiment: object) -> Callable:
-        from isaaclab_arena_g1.teleop.g1_pink_locomanipulation_pipeline import _build_g1_pink_locomanipulation_pipeline
+        from isaaclab_arena_g1.teleop.g1_pink_locomanipulation_pipeline import (
+            _build_g1_pink_locomanipulation_pipeline,
+        )
 
         return _build_g1_pink_locomanipulation_pipeline
 

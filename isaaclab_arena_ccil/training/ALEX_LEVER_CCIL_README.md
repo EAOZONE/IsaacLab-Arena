@@ -28,6 +28,34 @@ Expected generated HDF5:
 /datasets/alex_lever_sim/quest_alex_empty_mimic_80_test_obs_new.hdf5
 ```
 
+To generate a domain-randomized replacement dataset for the current `another_try_lever.usd`
+fixture, run the lever Mimic pipeline with conservative pose jitter and handle-color variation:
+
+```bash
+docker exec "$ARENA_CONTAINER" su $(id -un) -c '
+cd /workspaces/isaaclab_arena && /isaac-sim/python.sh \
+  isaaclab_arena/scripts/imitation_learning/run_lever_mimic_pipeline.py \
+  --work_dir /datasets/alex_lever_sim/mimic_dr_test_obs_new \
+  --record_count 20 \
+  --generated_count 400 \
+  --generation_num_envs 10 \
+  --device cuda \
+  --enable_cameras \
+  --overwrite \
+  --usd isaaclab_arena/assets/lever_sim/another_try_lever.usd \
+  --table none \
+  --success_angle_threshold 0.523599 \
+  --lever_dr \
+  --lever_pose_dr_xy_jitter 0.01 \
+  --lever_pose_dr_yaw_jitter_deg 5.0
+'
+```
+
+Use `/datasets/alex_lever_sim/mimic_dr_test_obs_new/generated.hdf5` as the source HDF5 for the
+conversion steps below. For `another_try_lever.usd`, pose is sampled conservatively at process/env
+setup time; per-reset root motion for this base-object USD remains disabled to avoid the known GPU
+PhysX instability.
+
 Sanity-check the corrected wrist quaternion packing. For each wrist, action `quat_x` should be
 closer to state `quat_x` than state `quat_y`, and action `quat_y` should be closer to state
 `quat_y` than state `quat_x`.
@@ -210,7 +238,10 @@ cd /workspaces/isaaclab_arena && /isaac-sim/python.sh \
   --test_obs_new_io \
   --usd isaaclab_arena/assets/lever_sim/another_try_lever.usd \
   --table none \
-  --success_angle_threshold 0.523599
+  --success_angle_threshold 0.523599 \
+  --lever_dr \
+  --lever_pose_dr_xy_jitter 0.01 \
+  --lever_pose_dr_yaw_jitter_deg 5.0
 '
 ```
 
@@ -237,7 +268,10 @@ cd /workspaces/isaaclab_arena && /isaac-sim/python.sh \
   --test_obs_new_io \
   --usd isaaclab_arena/assets/lever_sim/another_try_lever.usd \
   --table none \
-  --success_angle_threshold 0.523599
+  --success_angle_threshold 0.523599 \
+  --lever_dr \
+  --lever_pose_dr_xy_jitter 0.01 \
+  --lever_pose_dr_yaw_jitter_deg 5.0
 '
 ```
 

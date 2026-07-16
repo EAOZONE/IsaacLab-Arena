@@ -165,8 +165,11 @@ def _make_env_cfg_callback(
     robot_position_xyz: tuple[float, float, float],
     robot_yaw_rad: float,
     robot_xy_jitter: float,
+    robot_z_jitter: float,
     robot_yaw_jitter_rad: float,
     background_dr_names: list[str],
+    base_lever_reset_params: dict[str, object] | None = None,
+    base_lever_dr_params: dict[str, object] | None = None,
 ):
     control_hz_callback = _make_control_hz_callback(control_hz)
     if (
@@ -174,6 +177,8 @@ def _make_env_cfg_callback(
         and lever_success_object_name is None
         and not robot_dr
         and not background_dr_names
+        and base_lever_reset_params is None
+        and base_lever_dr_params is None
     ):
         return None
 
@@ -214,8 +219,33 @@ def _make_env_cfg_callback(
                     "base_position_xyz": robot_position_xyz,
                     "base_yaw_rad": robot_yaw_rad,
                     "xy_jitter": robot_xy_jitter,
+                    "z_jitter": robot_z_jitter,
                     "yaw_jitter_rad": robot_yaw_jitter_rad,
                 },
+            )
+        if base_lever_reset_params is not None:
+            from isaaclab.managers import EventTermCfg
+
+            from isaaclab_arena.terms.events import (
+                reset_internal_rigid_body_to_object_rest,
+            )
+
+            env_cfg.events.reset_base_lever_handle = EventTermCfg(
+                func=reset_internal_rigid_body_to_object_rest,
+                mode="reset",
+                params=base_lever_reset_params,
+            )
+        if base_lever_dr_params is not None:
+            from isaaclab.managers import EventTermCfg
+
+            from isaaclab_arena.terms.events import (
+                randomize_base_lever_pose_and_reset_handle,
+            )
+
+            env_cfg.events.randomize_base_lever_pose = EventTermCfg(
+                func=randomize_base_lever_pose_and_reset_handle,
+                mode="reset",
+                params=base_lever_dr_params,
             )
         if background_dr_names:
             from isaaclab.managers import EventTermCfg
@@ -387,9 +417,56 @@ class AlexEmptyEnvironment(ExampleEnvironmentBase):
                     )
                 )
 
+        base_lever_reset_params = None
+        base_lever_dr_params = None
+        if (
+            lever_success_object_name is not None
+            and lever_dr_enabled
+            and lever_usd_stem in lever_scene_builder.LEVER_BASE_OBJECT_STEMS
+        ):
+            body_local_pos, body_local_quat_xyzw = (
+                lever_scene_builder._handle_rest_pose_in_asset(args_cli.usd)
+            )
+            base_lever_reset_params = {
+                "object_name": lever_success_object_name,
+                "body_suffix": lever_scene_builder.LEVER_HANDLE_RIGID_BODY_SUFFIX,
+                "object_pose": Pose(
+                    position_xyz=usd_pos,
+                    rotation_xyzw=lever_object.initial_pose.rotation_xyzw,
+                ),
+                "object_scale": (usd_scale, usd_scale, usd_scale),
+                "body_local_pos": body_local_pos,
+                "body_local_quat_xyzw": body_local_quat_xyzw,
+            }
+            if args_cli.base_lever_pose_dr:
+                base_lever_reset_params = None
+                base_lever_dr_params = {
+                    "object_name": lever_success_object_name,
+                    "body_suffix": lever_scene_builder.LEVER_HANDLE_RIGID_BODY_SUFFIX,
+                    "base_position_xyz": usd_pos,
+                    "base_yaw_rad": math.radians(usd_yaw),
+                    "xy_jitter": args_cli.lever_dr_xy_jitter,
+                    "z_jitter": args_cli.lever_dr_z_jitter,
+                    "yaw_jitter_rad": math.radians(args_cli.lever_dr_yaw_jitter_deg),
+                    "object_scale": (usd_scale, usd_scale, usd_scale),
+                    "body_local_pos": body_local_pos,
+                    "body_local_quat_xyzw": body_local_quat_xyzw,
+                }
+
         lever_success_angle_deg = None
         if lever_success_object_name is not None:
             lever_success_angle_deg = args_cli.lever_success_angle_deg
+
+        robot_z_jitter = (
+            args_cli.robot_dr_z_jitter
+            if args_cli.robot_dr_z_jitter is not None
+            else (
+                args_cli.lever_dr_z_jitter
+                if is_lever_usd
+                and lever_usd_stem in lever_scene_builder.LEVER_BASE_OBJECT_STEMS
+                else 0.0
+            )
+        )
 
         embodiment = self.asset_registry.get_asset_by_name(args_cli.embodiment)(
             enable_cameras=args_cli.enable_cameras
@@ -401,6 +478,14 @@ class AlexEmptyEnvironment(ExampleEnvironmentBase):
                 rotation_xyzw=(0.0, 0.0, math.sin(half_yaw), math.cos(half_yaw)),
             )
         )
+        if args_cli.teleop_hand_mode != "passthrough":
+            assert hasattr(embodiment, "set_teleop_hand_override"), (
+                "--teleop_hand_mode is only supported by Alex Ability Hand Pink IK "
+                f"embodiments, got {args_cli.embodiment}."
+            )
+            embodiment.set_teleop_hand_override(
+                args_cli.teleop_hand_mode, args_cli.teleop_hand_close_fraction
+            )
 
         teleop_device = None
         if args_cli.teleop_device is not None:
@@ -421,8 +506,11 @@ class AlexEmptyEnvironment(ExampleEnvironmentBase):
                 robot_position_xyz=tuple(args_cli.spawn_pos),
                 robot_yaw_rad=math.radians(args_cli.spawn_yaw),
                 robot_xy_jitter=args_cli.robot_dr_xy_jitter,
+                robot_z_jitter=robot_z_jitter,
                 robot_yaw_jitter_rad=math.radians(args_cli.robot_dr_yaw_jitter_deg),
                 background_dr_names=background_dr_names,
+                base_lever_reset_params=base_lever_reset_params,
+                base_lever_dr_params=base_lever_dr_params,
             ),
         )
 
@@ -430,6 +518,21 @@ class AlexEmptyEnvironment(ExampleEnvironmentBase):
     def add_cli_args(parser: argparse.ArgumentParser) -> None:
         parser.add_argument(
             "--teleop_device", type=str, default=None, help="e.g. captury or openxr"
+        )
+        parser.add_argument(
+            "--teleop_hand_mode",
+            choices=("passthrough", "open", "thumbs_up", "fist"),
+            default="passthrough",
+            help=(
+                "Ability-hand teleop override. Use thumbs_up for lever headset demos when Quest "
+                "finger tracking is noisy; wrist tracking remains live."
+            ),
+        )
+        parser.add_argument(
+            "--teleop_hand_close_fraction",
+            type=float,
+            default=0.75,
+            help="Close fraction for --teleop_hand_mode thumbs_up or fist, in [0, 1].",
         )
         parser.add_argument("--embodiment", type=str, default="alex_v2_ability_hands")
         parser.add_argument(
@@ -475,6 +578,22 @@ class AlexEmptyEnvironment(ExampleEnvironmentBase):
             help="Lever board reset-time xy jitter half-range in metres when lever DR is enabled.",
         )
         parser.add_argument(
+            "--lever_dr_z_jitter",
+            type=float,
+            default=0.04,
+            help="Lever board reset-time z jitter half-range in metres when lever DR is enabled.",
+        )
+        parser.add_argument(
+            "--base_lever_pose_dr",
+            action=argparse.BooleanOptionalAction,
+            default=False,
+            help=(
+                "Enable reset-time pose jitter for base-object lever USDs such as another_try_lever. "
+                "Disabled by default because moving these nested PhysX assets after GPU simulation "
+                "starts can trigger CUDA illegal-address failures."
+            ),
+        )
+        parser.add_argument(
             "--lever_dr_yaw_jitter_deg",
             type=float,
             default=25.0,
@@ -485,6 +604,15 @@ class AlexEmptyEnvironment(ExampleEnvironmentBase):
             type=float,
             default=0.04,
             help="Alex root reset-time xy jitter half-range in metres when lever DR is enabled.",
+        )
+        parser.add_argument(
+            "--robot_dr_z_jitter",
+            type=float,
+            default=None,
+            help=(
+                "Alex root reset-time z jitter half-range in metres when lever DR is enabled. "
+                "Defaults to --lever_dr_z_jitter for base-object lever USDs whose own pose DR is disabled."
+            ),
         )
         parser.add_argument(
             "--robot_dr_yaw_jitter_deg",

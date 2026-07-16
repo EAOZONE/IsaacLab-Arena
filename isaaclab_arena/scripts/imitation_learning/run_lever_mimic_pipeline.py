@@ -43,7 +43,9 @@ def _sorted_demo_names(data_group: h5py.Group) -> list[str]:
     )
 
 
-def validate_dataset(path: Path, expected_count: int, *, require_annotations: bool = False) -> None:
+def validate_dataset(
+    path: Path, expected_count: int, *, require_annotations: bool = False
+) -> None:
     """Validate episode count, success flags, and optional Mimic annotations."""
     if not path.is_file():
         raise RuntimeError(f"Expected dataset was not created: {path}")
@@ -52,7 +54,9 @@ def validate_dataset(path: Path, expected_count: int, *, require_annotations: bo
             raise RuntimeError(f"{path} is missing its top-level 'data' group")
         demos = _sorted_demo_names(dataset["data"])
         if len(demos) != expected_count:
-            raise RuntimeError(f"{path} contains {len(demos)} episodes; expected {expected_count}")
+            raise RuntimeError(
+                f"{path} contains {len(demos)} episodes; expected {expected_count}"
+            )
         for name in demos:
             demo = dataset["data"][name]
             if not bool(demo.attrs.get("success", False)):
@@ -62,16 +66,28 @@ def validate_dataset(path: Path, expected_count: int, *, require_annotations: bo
             if require_annotations:
                 missing = [key for key in _REQUIRED_ANNOTATION_PATHS if key not in demo]
                 if missing:
-                    raise RuntimeError(f"{path}::{name} is missing Mimic annotations: {missing}")
+                    raise RuntimeError(
+                        f"{path}::{name} is missing Mimic annotations: {missing}"
+                    )
                 action_count = demo["actions"].shape[0]
                 for key in _REQUIRED_ANNOTATION_PATHS[:-1]:
                     group = demo[key]
                     datasets: list[h5py.Dataset] = []
-                    group.visititems(lambda _, item: datasets.append(item) if isinstance(item, h5py.Dataset) else None)
+                    group.visititems(
+                        lambda _, item: (
+                            datasets.append(item)
+                            if isinstance(item, h5py.Dataset)
+                            else None
+                        )
+                    )
                     if not datasets:
-                        raise RuntimeError(f"{path}::{name}/{key} contains no annotation arrays")
+                        raise RuntimeError(
+                            f"{path}::{name}/{key} contains no annotation arrays"
+                        )
                     misaligned = [
-                        dataset.name for dataset in datasets if not dataset.shape or dataset.shape[0] != action_count
+                        dataset.name
+                        for dataset in datasets
+                        if not dataset.shape or dataset.shape[0] != action_count
                     ]
                     if misaligned:
                         raise RuntimeError(
@@ -81,13 +97,24 @@ def validate_dataset(path: Path, expected_count: int, *, require_annotations: bo
                     eef_group = demo[f"obs/datagen_info/{eef_group_name}"]
                     missing_eefs = {"left", "right"} - set(eef_group)
                     if missing_eefs:
-                        raise RuntimeError(f"{path}::{name} is missing {eef_group_name} for {sorted(missing_eefs)}")
+                        raise RuntimeError(
+                            f"{path}::{name} is missing {eef_group_name} for {sorted(missing_eefs)}"
+                        )
                 signal_group = demo["obs/datagen_info/subtask_term_signals"]
                 if "lever_engaged" not in signal_group:
-                    raise RuntimeError(f"{path}::{name} is missing the lever_engaged signal")
+                    raise RuntimeError(
+                        f"{path}::{name} is missing the lever_engaged signal"
+                    )
                 signal = signal_group["lever_engaged"][...].astype(bool).reshape(-1)
-                if signal.size == 0 or signal[0] or not signal[-1] or (signal[:-1] & ~signal[1:]).any():
-                    raise RuntimeError(f"{path}::{name} has an invalid non-monotonic lever_engaged signal")
+                if (
+                    signal.size == 0
+                    or signal[0]
+                    or not signal[-1]
+                    or (signal[:-1] & ~signal[1:]).any()
+                ):
+                    raise RuntimeError(
+                        f"{path}::{name} has an invalid non-monotonic lever_engaged signal"
+                    )
 
 
 def trim_successful_dataset(path: Path, target_count: int) -> None:
@@ -105,7 +132,9 @@ def trim_successful_dataset(path: Path, target_count: int) -> None:
             raise RuntimeError(
                 f"{path} contains {len(successful)} successful episodes; expected at least {target_count}"
             )
-        if len(successful) == target_count and len(successful) == len(_sorted_demo_names(source["data"])):
+        if len(successful) == target_count and len(successful) == len(
+            _sorted_demo_names(source["data"])
+        ):
             return
 
         with h5py.File(tmp_path, "w") as output:
@@ -116,9 +145,13 @@ def trim_successful_dataset(path: Path, target_count: int) -> None:
                 output_data.attrs[key] = value
             total_steps = 0
             for index, source_name in enumerate(successful[:target_count]):
-                source.copy(source["data"][source_name], output_data, name=f"demo_{index}")
+                source.copy(
+                    source["data"][source_name], output_data, name=f"demo_{index}"
+                )
                 copied = output_data[f"demo_{index}"]
-                total_steps += int(copied.attrs.get("num_samples", copied["actions"].shape[0]))
+                total_steps += int(
+                    copied.attrs.get("num_samples", copied["actions"].shape[0])
+                )
             output_data.attrs["total"] = total_steps
     os.replace(tmp_path, path)
 
@@ -129,7 +162,7 @@ def _run(command: list[str], cwd: Path) -> None:
 
 
 def _environment_args(args: argparse.Namespace) -> list[str]:
-    return [
+    environment = [
         "alex_lever_turn",
         "--embodiment",
         args.embodiment,
@@ -150,9 +183,24 @@ def _environment_args(args: argparse.Namespace) -> list[str]:
         "--success_angle_threshold",
         str(args.success_angle_threshold),
     ]
+    if args.lever_dr:
+        environment.append("--lever_dr")
+    if args.lever_pose_dr:
+        environment.append("--lever_pose_dr")
+    environment.extend(
+        [
+            "--lever_pose_dr_xy_jitter",
+            str(args.lever_pose_dr_xy_jitter),
+            "--lever_pose_dr_yaw_jitter_deg",
+            str(args.lever_pose_dr_yaw_jitter_deg),
+        ]
+    )
+    return environment
 
 
-def build_commands(args: argparse.Namespace, repo_root: Path, outputs: dict[str, Path]) -> list[list[str]]:
+def build_commands(
+    args: argparse.Namespace, repo_root: Path, outputs: dict[str, Path]
+) -> list[list[str]]:
     """Build the three child-process commands for unit testing and execution."""
     scripts = repo_root / "isaaclab_arena" / "scripts" / "imitation_learning"
     common = [args.python_executable]
@@ -229,11 +277,35 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--embodiment", default="alex_v2_ability_hands")
     parser.add_argument("--spawn_pos", default="-0.4,-0.48682,0.94296")
     parser.add_argument("--spawn_yaw", type=float, default=0.0)
-    parser.add_argument("--usd", default="isaaclab_arena/assets/lever_sim/Lever_revolute.usd")
+    parser.add_argument(
+        "--usd", default="isaaclab_arena/assets/lever_sim/Lever_revolute.usd"
+    )
     parser.add_argument("--usd_pos", default="0.6,0.0,0.9")
     parser.add_argument("--usd_yaw", type=float, default=0.0)
     parser.add_argument("--usd_scale", type=float, default=1.0)
     parser.add_argument("--table", default="none", choices=("none", "seattle_lab"))
+    parser.add_argument(
+        "--lever_dr",
+        action="store_true",
+        help="Enable lever pose jitter plus handle-color variation in all pipeline stages.",
+    )
+    parser.add_argument(
+        "--lever_pose_dr",
+        action="store_true",
+        help="Enable lever pose jitter without enabling visual handle-color variation.",
+    )
+    parser.add_argument(
+        "--lever_pose_dr_xy_jitter",
+        type=float,
+        default=0.01,
+        help="Half-range for lever x/y jitter in meters when lever pose DR is enabled.",
+    )
+    parser.add_argument(
+        "--lever_pose_dr_yaw_jitter_deg",
+        type=float,
+        default=5.0,
+        help="Half-range for lever yaw jitter in degrees when lever pose DR is enabled.",
+    )
     parser.add_argument("--episode_length_s", type=float, default=10.0)
     parser.add_argument("--success_angle_threshold", type=float, default=0.35)
     parser.add_argument("--push_local_offset", default="-0.055,0.0,0.0")
@@ -256,7 +328,9 @@ def main(argv: list[str] | None = None) -> int:
         args.success_hold_steps,
     )
     if any(value <= 0 for value in positive_counts):
-        raise ValueError("episode counts, generation_num_envs, dwell_steps, and success_hold_steps must be positive")
+        raise ValueError(
+            "episode counts, generation_num_envs, dwell_steps, and success_hold_steps must be positive"
+        )
     if args.success_hold_steps < _LEVER_SUCCESS_DEBOUNCE_STEPS:
         raise ValueError(
             f"success_hold_steps must be at least {_LEVER_SUCCESS_DEBOUNCE_STEPS} so auto-annotation can verify success"
@@ -272,7 +346,9 @@ def main(argv: list[str] | None = None) -> int:
     }
     existing = [path for path in outputs.values() if path.exists()]
     if existing and not args.overwrite:
-        raise FileExistsError(f"Pipeline outputs already exist; pass --overwrite to replace them: {existing}")
+        raise FileExistsError(
+            f"Pipeline outputs already exist; pass --overwrite to replace them: {existing}"
+        )
     if args.overwrite:
         for path in outputs.values():
             with contextlib.suppress(FileNotFoundError):
@@ -286,7 +362,9 @@ def main(argv: list[str] | None = None) -> int:
     _run(generate, repo_root)
     trim_successful_dataset(outputs["generated"], args.generated_count)
     validate_dataset(outputs["generated"], args.generated_count)
-    print(f"\nPipeline complete: {outputs['generated']} ({args.generated_count} successful Mimic episodes)")
+    print(
+        f"\nPipeline complete: {outputs['generated']} ({args.generated_count} successful Mimic episodes)"
+    )
     return 0
 
 

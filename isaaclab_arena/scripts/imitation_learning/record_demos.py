@@ -69,6 +69,15 @@ parser.add_argument(
     help="Number of continuous steps with task success for concluding a demo as successful. Default is 10.",
 )
 parser.add_argument(
+    "--min_episode_s",
+    type=float,
+    default=0.0,
+    help=(
+        "Minimum recording duration in seconds before a task-success episode can export. "
+        "Use with --num_success_steps to avoid very short demos when success fires early."
+    ),
+)
+parser.add_argument(
     "--timed_episode_s",
     type=float,
     default=None,
@@ -526,7 +535,10 @@ def _quat_angle_deg(quat_xyzw: torch.Tensor, rest_quat_xyzw: torch.Tensor) -> fl
 
 
 def process_success_condition(
-    env: gym.Env, success_term: object | None, success_step_count: int
+    env: gym.Env,
+    success_term: object | None,
+    success_step_count: int,
+    episode_step_count: int,
 ) -> tuple[int, bool]:
     """Process the success condition for the current step.
 
@@ -548,7 +560,11 @@ def process_success_condition(
 
     if bool(success_term.func(env, **success_term.params)[0]):
         success_step_count += 1
-        if success_step_count >= args_cli.num_success_steps:
+        min_episode_steps = math.ceil(args_cli.min_episode_s * args_cli.step_hz)
+        if (
+            success_step_count >= args_cli.num_success_steps
+            and episode_step_count >= min_episode_steps
+        ):
             export_episode_as_success(env)
             print("Success condition met! Recording completed.")
             return success_step_count, True
@@ -679,6 +695,7 @@ def run_simulation_loop(
     """
     current_recorded_demo_count = 0
     success_step_count = 0
+    episode_step_count = 0
     should_reset_recording_instance = False
     running_recording_instance = (not args_cli.xr) or args_cli.start_recording_immediately
     episode_recording_start_time: float | None = None
@@ -701,9 +718,10 @@ def run_simulation_loop(
         print("Recording instance reset requested")
 
     def start_recording_instance():
-        nonlocal running_recording_instance, episode_recording_start_time
+        nonlocal running_recording_instance, episode_recording_start_time, episode_step_count
         running_recording_instance = True
         episode_recording_start_time = time.time()
+        episode_step_count = 0
         if embodiment is not None and hasattr(embodiment, "begin_teleop_action_warmup"):
             embodiment.begin_teleop_action_warmup()
         print("Recording started")
@@ -736,6 +754,7 @@ def run_simulation_loop(
         """Inner loop function with access to nonlocal variables."""
         nonlocal current_recorded_demo_count, success_step_count, should_reset_recording_instance
         nonlocal running_recording_instance, label_text, episode_recording_start_time
+        nonlocal episode_step_count
         nonlocal lever_object_name, lever_rest_quat, last_lever_angle_print_time
         nonlocal last_waiting_for_teleop_action_print_time
 
@@ -755,10 +774,12 @@ def run_simulation_loop(
 
         def perform_episode_reset() -> None:
             nonlocal success_step_count, should_reset_recording_instance, episode_recording_start_time
+            nonlocal episode_step_count
             nonlocal lever_rest_quat, last_lever_angle_print_time
             success_step_count = handle_reset(
                 env, success_step_count, instruction_display, label_text
             )
+            episode_step_count = 0
             teleop_interface.reset()
             if embodiment is not None and hasattr(
                 embodiment, "reset_teleop_action_warmup"
@@ -787,6 +808,7 @@ def run_simulation_loop(
             print(f"Lever angle debug enabled for scene object '{lever_object_name}'.")
         if running_recording_instance:
             episode_recording_start_time = time.time()
+            episode_step_count = 0
 
         # Pin a static first-person viewport at the head once the robot pose is valid.
         if args_cli.head_view:
@@ -843,6 +865,7 @@ def run_simulation_loop(
                 if running_recording_instance:
                     # Compute actions based on environment
                     obv = env.step(actions)
+                    episode_step_count += 1
                     if (
                         lever_object_name is not None
                         and lever_rest_quat is not None
@@ -874,7 +897,9 @@ def run_simulation_loop(
                 if timed_episode_s is None:
                     # Check for task success condition
                     success_step_count_new, success_reset_needed = (
-                        process_success_condition(env, success_term, success_step_count)
+                        process_success_condition(
+                            env, success_term, success_step_count, episode_step_count
+                        )
                     )
                     success_step_count = success_step_count_new
                     if success_reset_needed:

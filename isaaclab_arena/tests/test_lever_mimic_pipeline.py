@@ -11,7 +11,9 @@ import os
 
 import pytest
 
-from isaaclab_arena.scripts.imitation_learning import run_lever_mimic_pipeline as pipeline
+from isaaclab_arena.scripts.imitation_learning import (
+    run_lever_mimic_pipeline as pipeline,
+)
 
 
 def _write_dataset(path, successes, *, annotated=False):
@@ -29,14 +31,22 @@ def _write_dataset(path, successes, *, annotated=False):
             if annotated:
                 datagen = demo.create_group("obs/datagen_info")
                 object_pose = datagen.create_group("object_pose")
-                object_pose.create_dataset("lever_revolute", data=np.zeros((3, 4, 4), dtype=np.float32))
+                object_pose.create_dataset(
+                    "lever_revolute", data=np.zeros((3, 4, 4), dtype=np.float32)
+                )
                 eef_pose = datagen.create_group("eef_pose")
                 target_eef_pose = datagen.create_group("target_eef_pose")
                 for eef_name in ("left", "right"):
-                    eef_pose.create_dataset(eef_name, data=np.zeros((3, 4, 4), dtype=np.float32))
-                    target_eef_pose.create_dataset(eef_name, data=np.zeros((3, 4, 4), dtype=np.float32))
+                    eef_pose.create_dataset(
+                        eef_name, data=np.zeros((3, 4, 4), dtype=np.float32)
+                    )
+                    target_eef_pose.create_dataset(
+                        eef_name, data=np.zeros((3, 4, 4), dtype=np.float32)
+                    )
                 signals = datagen.create_group("subtask_term_signals")
-                signals.create_dataset("lever_engaged", data=np.array([False, True, True]))
+                signals.create_dataset(
+                    "lever_engaged", data=np.array([False, True, True])
+                )
         data.attrs["total"] = total
 
 
@@ -58,7 +68,9 @@ def test_validate_annotated_dataset_checks_monotonic_signal(tmp_path):
     pipeline.validate_dataset(path, 2, require_annotations=True)
 
     with h5py.File(path, "r+") as dataset:
-        signal = dataset["data/demo_1/obs/datagen_info/subtask_term_signals/lever_engaged"]
+        signal = dataset[
+            "data/demo_1/obs/datagen_info/subtask_term_signals/lever_engaged"
+        ]
         signal[...] = np.array([False, True, False])
 
     try:
@@ -70,17 +82,22 @@ def test_validate_annotated_dataset_checks_monotonic_signal(tmp_path):
 
 
 def test_pipeline_commands_target_lever_and_requested_counts(tmp_path):
-    args = pipeline._build_parser().parse_args([
-        "--work_dir",
-        str(tmp_path),
-        "--record_count",
-        "20",
-        "--generated_count",
-        "400",
-        "--generation_num_envs",
-        "8",
-    ])
-    outputs = {name: tmp_path / f"{name}.hdf5" for name in ("recorded", "annotated", "generated")}
+    args = pipeline._build_parser().parse_args(
+        [
+            "--work_dir",
+            str(tmp_path),
+            "--record_count",
+            "20",
+            "--generated_count",
+            "400",
+            "--generation_num_envs",
+            "8",
+        ]
+    )
+    outputs = {
+        name: tmp_path / f"{name}.hdf5"
+        for name in ("recorded", "annotated", "generated")
+    }
     commands = pipeline.build_commands(args, tmp_path, outputs)
 
     assert len(commands) == 3
@@ -89,31 +106,85 @@ def test_pipeline_commands_target_lever_and_requested_counts(tmp_path):
     assert "--auto" in commands[1]
     assert commands[2][commands[2].index("--generation_num_trials") + 1] == "400"
     assert commands[2][commands[2].index("--num_envs") + 1] == "8"
-    assert all("alex_lever_turn" in command and "--mimic" in command for command in commands)
+    assert all(
+        "alex_lever_turn" in command and "--mimic" in command for command in commands
+    )
     assert "--spawn_pos=-0.4,-0.48682,0.94296" in commands[0]
     assert "--push_local_offset=-0.055,0.0,0.0" in commands[0]
+
+
+def test_pipeline_commands_forward_lever_dr_args(tmp_path):
+    args = pipeline._build_parser().parse_args(
+        [
+            "--work_dir",
+            str(tmp_path),
+            "--lever_dr",
+            "--lever_pose_dr",
+            "--lever_pose_dr_xy_jitter",
+            "0.02",
+            "--lever_pose_dr_yaw_jitter_deg",
+            "10.0",
+        ]
+    )
+    outputs = {
+        name: tmp_path / f"{name}.hdf5"
+        for name in ("recorded", "annotated", "generated")
+    }
+    commands = pipeline.build_commands(args, tmp_path, outputs)
+
+    for command in commands:
+        assert "--lever_dr" in command
+        assert "--lever_pose_dr" in command
+        assert command[command.index("--lever_pose_dr_xy_jitter") + 1] == "0.02"
+        assert command[command.index("--lever_pose_dr_yaw_jitter_deg") + 1] == "10.0"
+
+
+def test_pipeline_uses_another_try_lever_object_name(tmp_path):
+    args = pipeline._build_parser().parse_args(
+        [
+            "--work_dir",
+            str(tmp_path),
+            "--usd",
+            "isaaclab_arena/assets/lever_sim/another_try_lever.usd",
+        ]
+    )
+    outputs = {
+        name: tmp_path / f"{name}.hdf5"
+        for name in ("recorded", "annotated", "generated")
+    }
+    record_command = pipeline.build_commands(args, tmp_path, outputs)[0]
+
+    assert (
+        record_command[record_command.index("--object_name") + 1] == "another_try_lever"
+    )
 
 
 @pytest.mark.with_subprocess
 def test_lever_mimic_pipeline_one_episode_smoke(tmp_path):
     from isaaclab_arena.embodiments.alex.alex import _ABILITY_HAND_MODELS_DIR
 
-    left_hand_urdf = os.path.join(_ABILITY_HAND_MODELS_DIR, "urdf", "abilityHand", "ability_hand_left_large.urdf")
+    left_hand_urdf = os.path.join(
+        _ABILITY_HAND_MODELS_DIR, "urdf", "abilityHand", "ability_hand_left_large.urdf"
+    )
     if not os.path.isfile(left_hand_urdf):
-        pytest.skip("Ability Hand model mount is required for the lever Mimic simulation smoke test")
+        pytest.skip(
+            "Ability Hand model mount is required for the lever Mimic simulation smoke test"
+        )
 
     assert (
-        pipeline.main([
-            "--work_dir",
-            str(tmp_path),
-            "--record_count",
-            "1",
-            "--generated_count",
-            "1",
-            "--generation_num_envs",
-            "1",
-            "--device",
-            "cpu",
-        ])
+        pipeline.main(
+            [
+                "--work_dir",
+                str(tmp_path),
+                "--record_count",
+                "1",
+                "--generated_count",
+                "1",
+                "--generation_num_envs",
+                "1",
+                "--device",
+                "cpu",
+            ]
+        )
         == 0
     )

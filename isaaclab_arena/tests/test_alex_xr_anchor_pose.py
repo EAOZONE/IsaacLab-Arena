@@ -42,13 +42,37 @@ def _assert_alex_xr_cfg(embodiment_name: str, simulation_app) -> bool:
         f"{embodiment_name}: anchor_prim_path expected {_ALEX_XR_ANCHOR_TORSO_PRIM_PATH}, "
         f"got {xr_cfg.anchor_prim_path}"
     )
-    assert embodiment.get_teleop_target_frame_prim_path() is None, (
-        f"{embodiment_name}: teleop should leave hand poses in world frame for Pink IK"
-    )
-    assert xr_cfg.fixed_anchor_height is True, f"{embodiment_name}: fixed_anchor_height should be True"
     assert (
-        xr_cfg.anchor_rotation_mode == XrAnchorRotationMode.FIXED
-    ), f"{embodiment_name}: anchor_rotation_mode should be FIXED (physics link yaw follow is unstable)"
+        embodiment.get_teleop_target_frame_prim_path() is None
+    ), f"{embodiment_name}: teleop should leave hand poses in world frame for Pink IK"
+    assert (
+        xr_cfg.fixed_anchor_height is False
+    ), f"{embodiment_name}: fixed_anchor_height should be False"
+    assert (
+        xr_cfg.anchor_rotation_mode == XrAnchorRotationMode.CUSTOM
+    ), f"{embodiment_name}: anchor_rotation_mode should use custom absolute torso yaw"
+    assert (
+        xr_cfg.anchor_rotation_custom_func is not None
+    ), f"{embodiment_name}: anchor_rotation_custom_func should be configured"
+    yaw = np.deg2rad(30.0)
+    torso_pose = np.array(
+        [0.0, 0.0, 1.2, 0.0, 0.0, np.sin(yaw * 0.5), np.cos(yaw * 0.5)]
+    )
+    anchored_rot = xr_cfg.anchor_rotation_custom_func(np.zeros(7), torso_pose)
+    expected_rot = np.array([0.0, 0.0, -0.5, np.sqrt(3.0) / 2.0])
+    np.testing.assert_allclose(
+        anchored_rot,
+        expected_rot,
+        atol=1e-5,
+        err_msg=f"{embodiment_name}: custom XR anchor should apply absolute torso yaw",
+    )
+    bad_rot = xr_cfg.anchor_rotation_custom_func(np.zeros(7), np.zeros(7))
+    np.testing.assert_allclose(
+        bad_rot,
+        _EXPECTED_ANCHOR_ROT,
+        rtol=1e-5,
+        err_msg=f"{embodiment_name}: custom XR anchor should fall back to fixed anchor rotation",
+    )
 
     robot_pose = Pose(position_xyz=(0.5, 1.0, 0.0), rotation_xyzw=(0.0, 0.0, 0.0, 1.0))
     embodiment.set_initial_pose(robot_pose)
@@ -86,20 +110,28 @@ def _test_alex_v2_pink_xr_anchor(simulation_app) -> bool:
 
 
 def test_alex_v1_ability_hands_xr_anchor_pose():
-    result = run_simulation_app_function(_test_alex_v1_ability_hands_xr_anchor, headless=HEADLESS)
+    result = run_simulation_app_function(
+        _test_alex_v1_ability_hands_xr_anchor, headless=HEADLESS
+    )
     assert result
 
 
 def test_alex_v2_ability_hands_xr_anchor_pose():
-    result = run_simulation_app_function(_test_alex_v2_ability_hands_xr_anchor, headless=HEADLESS)
+    result = run_simulation_app_function(
+        _test_alex_v2_ability_hands_xr_anchor, headless=HEADLESS
+    )
     assert result
 
 
 def test_alex_v1_pink_xr_anchor_pose():
-    result = run_simulation_app_function(_test_alex_v1_pink_xr_anchor, headless=HEADLESS)
+    result = run_simulation_app_function(
+        _test_alex_v1_pink_xr_anchor, headless=HEADLESS
+    )
     assert result
 
 
 def test_alex_v2_pink_xr_anchor_pose():
-    result = run_simulation_app_function(_test_alex_v2_pink_xr_anchor, headless=HEADLESS)
+    result = run_simulation_app_function(
+        _test_alex_v2_pink_xr_anchor, headless=HEADLESS
+    )
     assert result

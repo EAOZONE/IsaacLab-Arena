@@ -74,7 +74,9 @@ class AlexLeverTurnEnvironment(ExampleEnvironmentBase):
                 if args_cli.usd_scale == 1.0
                 else args_cli.usd_scale
             )
-        if bool(args_cli.lever_dr) or bool(args_cli.lever_pose_dr):
+        lever_visual_dr = bool(args_cli.lever_dr)
+        lever_pose_dr = lever_visual_dr or bool(args_cli.lever_pose_dr)
+        if lever_pose_dr:
             from pathlib import Path
 
             usd_stem = Path(args_cli.usd).stem.lower()
@@ -95,6 +97,10 @@ class AlexLeverTurnEnvironment(ExampleEnvironmentBase):
             usd_scale=usd_scale,
             lever_dr=args_cli.lever_dr,
             table=args_cli.table,
+            lever_dr_xy_jitter=args_cli.lever_pose_dr_xy_jitter,
+            lever_dr_yaw_jitter_deg=args_cli.lever_pose_dr_yaw_jitter_deg,
+            lever_pose_dr=lever_pose_dr,
+            lever_visual_dr=lever_visual_dr,
         )
 
         mimic_mode = bool(args_cli.mimic)

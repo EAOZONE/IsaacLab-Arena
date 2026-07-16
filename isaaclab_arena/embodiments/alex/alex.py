@@ -917,33 +917,39 @@ def _configure_fixed_base_torso_actuator(robot_cfg: ArticulationCfg) -> None:
 
 # Teleop arm-tracking PD gains (teleop only; policy/training use
 # ``_configure_teleop_arm_actuators`` is bypassed in favor of
-# ``_configure_policy_arm_actuators``). The IK already commands the full wrist
-# error each step (gain 1.0), so remaining "arm trails my hand" lag is the PD
-# joints physically converging to the IK solution: higher stiffness raises the
-# tracking bandwidth (and reduces the over-damping from the fixed damping), so
-# the arm catches the operator faster. Tunable live via env vars to find the
-# snappiest stable value for a given rig; push stiffness up for less lag, raise
-# damping if it starts to jitter/oscillate.
+# ``_configure_policy_arm_actuators``). The proximal arm needs enough stiffness
+# to hold itself up when fixed-base gravity compensation is unavailable, while
+# the wrist/gripper joints are the first joints to fight contact constraints
+# during lever pushes. Keep those distal joints softer by default so contact can
+# deflect the hand without exciting the whole IK chain.
 ALEX_TELEOP_ARM_STIFFNESS = float(os.environ.get("ALEX_TELEOP_ARM_STIFFNESS", "6000.0"))
 ALEX_TELEOP_ARM_DAMPING = float(os.environ.get("ALEX_TELEOP_ARM_DAMPING", "100.0"))
+ALEX_TELEOP_WRIST_STIFFNESS = float(
+    os.environ.get("ALEX_TELEOP_WRIST_STIFFNESS", "1200.0")
+)
+ALEX_TELEOP_WRIST_DAMPING = float(os.environ.get("ALEX_TELEOP_WRIST_DAMPING", "60.0"))
 
 
 def _configure_teleop_arm_actuators(
     robot_cfg: ArticulationCfg, include_wrists: bool
 ) -> None:
-    joint_expr = (
-        [".*SHOULDER.*", ".*ELBOW.*", ".*WRIST.*", ".*GRIPPER.*"]
-        if include_wrists
-        else [".*SHOULDER.*", ".*ELBOW.*"]
-    )
     robot_cfg.actuators["arms"] = ImplicitActuatorCfg(
-        joint_names_expr=joint_expr,
+        joint_names_expr=[".*SHOULDER.*", ".*ELBOW.*"],
         effort_limit=torch.inf,
         velocity_limit=torch.inf,
         stiffness=ALEX_TELEOP_ARM_STIFFNESS,
         damping=ALEX_TELEOP_ARM_DAMPING,
         armature=0.0,
     )
+    if include_wrists:
+        robot_cfg.actuators["wrists"] = ImplicitActuatorCfg(
+            joint_names_expr=[".*WRIST.*", ".*GRIPPER.*"],
+            effort_limit=torch.inf,
+            velocity_limit=torch.inf,
+            stiffness=ALEX_TELEOP_WRIST_STIFFNESS,
+            damping=ALEX_TELEOP_WRIST_DAMPING,
+            armature=0.0,
+        )
 
 
 def _configure_policy_arm_actuators(robot_cfg: ArticulationCfg) -> None:
@@ -1093,6 +1099,8 @@ _ZED_X_MINI_PINHOLE_SPAWN = sim_utils.PinholeCameraCfg.from_intrinsic_matrix(
 # (articulation ``body_pos_w`` / ``body_quat_w``) instead of this USD path.
 _ALEX_XR_ANCHOR_TORSO_PRIM_PATH = "/World/envs/env_0/Robot/Geometry/TORSO_LINK"
 _ALEX_CAPTURY_ANCHOR_BODY_NAME = "TORSO_LINK"
+_ALEX_XR_ANCHOR_POS = (0.0, 0.0, -1.0)
+_ALEX_XR_ANCHOR_ROT = (0.0, 0.0, -0.70711, 0.70711)
 
 
 # Teleop-only elbow tracking (see CapturyTeleopDevice). The elbow IK targets the
@@ -1361,10 +1369,15 @@ def build_ability_hand_joint_action(
     )
 
 
-_ABILITY_HAND_THUMB_JOINT_SUFFIXES = ("thumb_q1", "thumb_q2")
-_ABILITY_HAND_IS_THUMB_JOINT = torch.tensor(
+_ABILITY_HAND_THUMB_ROTATOR_SUFFIX = "thumb_q1"
+_ABILITY_HAND_THUMB_FLEXOR_SUFFIX = "thumb_q2"
+_ABILITY_HAND_THUMB_JOINT_SUFFIXES = (
+    _ABILITY_HAND_THUMB_FLEXOR_SUFFIX,
+    _ABILITY_HAND_THUMB_ROTATOR_SUFFIX,
+)
+_ABILITY_HAND_IS_THUMB_FLEXOR_JOINT = torch.tensor(
     [
-        name.endswith(_ABILITY_HAND_THUMB_JOINT_SUFFIXES)
+        name.endswith(_ABILITY_HAND_THUMB_FLEXOR_SUFFIX)
         for name in ABILITY_HAND_TELEOP_JOINT_ORDER
     ]
 )
@@ -1375,29 +1388,109 @@ def build_ability_hand_thumbs_up_action(
     right_close_fraction: float = 0.0,
     device: torch.device | str = "cpu",
 ) -> torch.Tensor:
-    """Like :func:`build_ability_hand_joint_action`, but the thumb stays fully open.
+    """Like :func:`build_ability_hand_joint_action`, but the thumb flexor stays open.
 
-    Curling the four fingers while leaving the thumb at its open (extended, not
-    opposed across the palm) pose gives a "thumbs up" fist instead of a full
-    grasp — for scripted pushes where the thumb should stay clear of the
-    contact surface rather than curl into it.
+    Curling the four fingers while driving ``thumb_q1`` (the base rotator) and
+    leaving ``thumb_q2`` (the flexor) fully open gives a "thumbs up" fist
+    instead of a full grasp.
     """
     closed = build_ability_hand_joint_action(
         left_close_fraction, right_close_fraction, device=device
     )
     open_hand = build_ability_hand_joint_action(0.0, 0.0, device=device)
-    thumb_mask = _ABILITY_HAND_IS_THUMB_JOINT.to(device=device)
-    return torch.where(thumb_mask, open_hand, closed)
+    thumb_flexor_mask = _ABILITY_HAND_IS_THUMB_FLEXOR_JOINT.to(device=device)
+    return torch.where(thumb_flexor_mask, open_hand, closed)
+
+
+ABILITY_HAND_TELEOP_OVERRIDE_MODES = ("passthrough", "open", "thumbs_up", "fist")
+
+
+def override_ability_hand_teleop_action(
+    action: torch.Tensor, mode: str, close_fraction: float
+) -> torch.Tensor:
+    """Replace the teleop hand-joint block with a stable scripted posture."""
+    assert (
+        mode in ABILITY_HAND_TELEOP_OVERRIDE_MODES
+    ), f"Invalid ability hand teleop override mode {mode!r}; choose one of {ABILITY_HAND_TELEOP_OVERRIDE_MODES}."
+    assert (
+        0.0 <= close_fraction <= 1.0
+    ), f"close fraction must be in [0, 1], got {close_fraction}"
+    if mode == "passthrough" or action.numel() < ALEX_ABILITY_HAND_TOTAL_ACTION_DIM:
+        return action
+
+    if mode == "open":
+        hand_action = build_ability_hand_joint_action(0.0, 0.0, device=action.device)
+    elif mode == "thumbs_up":
+        hand_action = build_ability_hand_thumbs_up_action(
+            close_fraction, close_fraction, device=action.device
+        )
+    else:
+        hand_action = build_ability_hand_joint_action(
+            close_fraction, close_fraction, device=action.device
+        )
+
+    start = ALEX_ABILITY_HAND_WRIST_ACTION_DIM
+    end = start + ALEX_ABILITY_HAND_HAND_ACTION_DIM
+    action = action.clone()
+    action[start:end] = hand_action.to(dtype=action.dtype)
+    return action
+
+
+def _quat_xyzw_multiply(
+    lhs: tuple[float, float, float, float],
+    rhs: tuple[float, float, float, float],
+) -> tuple[float, float, float, float]:
+    """Compose two xyzw quaternions."""
+    x1, y1, z1, w1 = lhs
+    x2, y2, z2, w2 = rhs
+    return (
+        w1 * x2 + x1 * w2 + y1 * z2 - z1 * y2,
+        w1 * y2 - x1 * z2 + y1 * w2 + z1 * x2,
+        w1 * z2 + x1 * y2 - y1 * x2 + z1 * w2,
+        w1 * w2 - x1 * x2 - y1 * y2 - z1 * z2,
+    )
+
+
+def _normalize_quat_xyzw(
+    quat_xyzw: tuple[float, float, float, float],
+) -> tuple[float, float, float, float]:
+    norm = math.sqrt(sum(component * component for component in quat_xyzw))
+    if norm < 1e-6 or not math.isfinite(norm):
+        return _ALEX_XR_ANCHOR_ROT
+    return tuple(component / norm for component in quat_xyzw)
+
+
+def alex_xr_anchor_rot_from_torso_yaw(
+    _headpose: np.ndarray, primpose: np.ndarray
+) -> np.ndarray:
+    """Return the Alex XR anchor rotation using the torso prim's absolute yaw."""
+    if primpose.shape[0] < 7:
+        return np.array(_ALEX_XR_ANCHOR_ROT, dtype=np.float64)
+
+    qx, qy, qz, qw = (float(value) for value in primpose[3:7])
+    norm = math.sqrt(qx * qx + qy * qy + qz * qz + qw * qw)
+    if norm < 1e-6 or not math.isfinite(norm):
+        return np.array(_ALEX_XR_ANCHOR_ROT, dtype=np.float64)
+
+    qx /= norm
+    qy /= norm
+    qz /= norm
+    qw /= norm
+    yaw = math.atan2(2.0 * (qw * qz + qx * qy), 1.0 - 2.0 * (qy * qy + qz * qz))
+    yaw_quat_xyzw = (0.0, 0.0, math.sin(yaw * 0.5), math.cos(yaw * 0.5))
+    return np.array(
+        _normalize_quat_xyzw(_quat_xyzw_multiply(yaw_quat_xyzw, _ALEX_XR_ANCHOR_ROT)),
+        dtype=np.float64,
+    )
 
 
 _ALEX_XR_CFG = XrCfg(
-    anchor_pos=(0.0, 0.0, -1.0),
-    anchor_rot=(0.0, 0.0, -0.70711, 0.70711),
+    anchor_pos=_ALEX_XR_ANCHOR_POS,
+    anchor_rot=_ALEX_XR_ANCHOR_ROT,
     anchor_prim_path=_ALEX_XR_ANCHOR_TORSO_PRIM_PATH,
-    # FIXED: follow torso translation but keep anchor_rot.  FOLLOW_PRIM_* reads yaw
-    # from Fabric on physics-driven link prims and can yield zero-norm quaternions.
-    anchor_rotation_mode=XrAnchorRotationMode.FIXED,
-    fixed_anchor_height=True,
+    anchor_rotation_mode=XrAnchorRotationMode.CUSTOM,
+    anchor_rotation_custom_func=alex_xr_anchor_rot_from_torso_yaw,
+    fixed_anchor_height=False,
 )
 
 
@@ -2005,9 +2098,9 @@ class TestObsNewPinkIKAction(IKFailureTrackingPinkInverseKinematicsAction):
         return torch.stack([yaw, pitch], dim=1)
 
     def process_actions(self, actions: torch.Tensor) -> None:
-        assert actions.shape[1] == TEST_OBS_NEW_ACTION_DIM, (
-            f"test_obs_new action expects {TEST_OBS_NEW_ACTION_DIM} dims, got {tuple(actions.shape)}"
-        )
+        assert (
+            actions.shape[1] == TEST_OBS_NEW_ACTION_DIM
+        ), f"test_obs_new action expects {TEST_OBS_NEW_ACTION_DIM} dims, got {tuple(actions.shape)}"
         self._raw_actions[:] = actions
 
         if self._target_neck_joint_positions.shape[1] == 2:
@@ -2023,7 +2116,9 @@ class TestObsNewPinkIKAction(IKFailureTrackingPinkInverseKinematicsAction):
         self._target_hand_joint_positions = pink_ik_actions[:, -self.hand_joint_dim :]
         self.base_link_frame_in_world_rf = self._get_base_link_frame_transform()
         controlled_frame_poses = self._extract_controlled_frame_poses(pink_ik_actions)
-        transformed_poses = self._transform_poses_to_base_link_frame(controlled_frame_poses)
+        transformed_poses = self._transform_poses_to_base_link_frame(
+            controlled_frame_poses
+        )
         self._set_task_targets(transformed_poses)
 
     def apply_actions(self) -> None:
@@ -2255,7 +2350,9 @@ class AlexAbilityHandEmbodiment(AlexTeleopEmbodimentMixin, EmbodimentBase):
             self.observation_config = AlexAbilityHandRLObservationsCfg()
         else:
             self.observation_config = AlexAbilityHandObservationsCfg()
-        self.observation_config.policy.concatenate_terms = use_test_obs_new_io or self.concatenate_observation_terms
+        self.observation_config.policy.concatenate_terms = (
+            use_test_obs_new_io or self.concatenate_observation_terms
+        )
         self.event_config = AlexEventCfg()
         _configure_camera_events(self.event_config, enable_cameras)
         self.mimic_env = AlexAbilityHandMimicEnv
@@ -2314,6 +2411,11 @@ class AlexAbilityHandEmbodiment(AlexTeleopEmbodimentMixin, EmbodimentBase):
             action = stabilize_alex_ability_hand_teleop_action(
                 env, action, force_hold_wrists=force_hold_wrists
             )
+        action = override_ability_hand_teleop_action(
+            action,
+            self._teleop_hand_override_mode,
+            self._teleop_hand_override_close_fraction,
+        )
         if self._teleop_max_close_fraction < 1.0:
             action = clamp_ability_hand_close_fraction(
                 action, self._teleop_max_close_fraction
@@ -2325,6 +2427,8 @@ class AlexAbilityHandEmbodiment(AlexTeleopEmbodimentMixin, EmbodimentBase):
     _elbow_tracking_enabled: bool = False
     _teleop_relax_wrist_clamp: bool = False
     _teleop_max_close_fraction: float = 1.0
+    _teleop_hand_override_mode: str = "passthrough"
+    _teleop_hand_override_close_fraction: float = ALEX_ABILITY_HAND_MAX_CLOSE_FRACTION
 
     def set_teleop_max_close_fraction(
         self, fraction: float = ALEX_ABILITY_HAND_MAX_CLOSE_FRACTION
@@ -2334,6 +2438,21 @@ class AlexAbilityHandEmbodiment(AlexTeleopEmbodimentMixin, EmbodimentBase):
             0.0 < fraction <= 1.0
         ), f"close fraction must be in (0, 1], got {fraction}"
         self._teleop_max_close_fraction = fraction
+
+    def set_teleop_hand_override(
+        self,
+        mode: str = "passthrough",
+        close_fraction: float = ALEX_ABILITY_HAND_MAX_CLOSE_FRACTION,
+    ) -> None:
+        """Force teleop ability-hand joints to a stable posture while keeping wrist targets live."""
+        assert (
+            mode in ABILITY_HAND_TELEOP_OVERRIDE_MODES
+        ), f"Invalid teleop hand override mode {mode!r}; choose one of {ABILITY_HAND_TELEOP_OVERRIDE_MODES}."
+        assert (
+            0.0 <= close_fraction <= 1.0
+        ), f"close fraction must be in [0, 1], got {close_fraction}"
+        self._teleop_hand_override_mode = mode
+        self._teleop_hand_override_close_fraction = close_fraction
 
     def enable_captury_teleop_responsiveness(
         self,

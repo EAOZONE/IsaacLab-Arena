@@ -26,10 +26,15 @@ def test_alex_empty_lever_dr_cli_defaults_to_auto():
 
     args = parser.parse_args([])
 
+    assert args.teleop_hand_mode == "passthrough"
+    assert args.teleop_hand_close_fraction == 0.75
     assert args.lever_dr is None
     assert args.lever_dr_xy_jitter == 0.05
+    assert args.lever_dr_z_jitter == 0.04
+    assert args.base_lever_pose_dr is False
     assert args.lever_dr_yaw_jitter_deg == 25.0
     assert args.robot_dr_xy_jitter == 0.04
+    assert args.robot_dr_z_jitter is None
     assert args.robot_dr_yaw_jitter_deg == 8.0
     assert args.background_dr_pool == "packing_table"
     assert args.table == "none"
@@ -75,6 +80,7 @@ def test_alex_empty_env_cfg_callback_installs_dr_events():
         robot_position_xyz=(-0.4, -0.48682, 0.94296),
         robot_yaw_rad=0.0,
         robot_xy_jitter=0.04,
+        robot_z_jitter=0.03,
         robot_yaw_jitter_rad=math.radians(8.0),
         background_dr_names=[
             "dr_background_00_kitchen",
@@ -87,12 +93,102 @@ def test_alex_empty_env_cfg_callback_installs_dr_events():
 
     assert env_cfg.events.randomize_alex_root_pose.params["asset_cfg"].name == "robot"
     assert env_cfg.events.randomize_alex_root_pose.params["xy_jitter"] == 0.04
+    assert env_cfg.events.randomize_alex_root_pose.params["z_jitter"] == 0.03
     assert env_cfg.events.randomize_background_visibility.params[
         "background_names"
     ] == [
         "dr_background_00_kitchen",
         "dr_background_01_packing_table",
     ]
+
+
+def test_alex_empty_env_cfg_callback_installs_base_lever_pose_dr_event():
+    pytest.importorskip("isaaclab")
+
+    from isaaclab_arena.terms.events import randomize_base_lever_pose_and_reset_handle
+
+    env_cfg = _DummyCfg()
+    env_cfg.events = _DummyCfg()
+    env_cfg.terminations = _DummyCfg()
+    env_cfg.sim = _DummyCfg()
+    base_lever_dr_params = {
+        "object_name": "another_try_lever",
+        "body_suffix": "/Handle_1",
+        "base_position_xyz": (-0.05, -0.51, 0.75),
+        "base_yaw_rad": math.radians(180.0),
+        "xy_jitter": 0.06,
+        "z_jitter": 0.04,
+        "yaw_jitter_rad": math.radians(35.0),
+        "object_scale": (0.0254, 0.0254, 0.0254),
+        "body_local_pos": (0.0, 0.0, 0.0),
+        "body_local_quat_xyzw": (0.0, 0.0, 0.0, 1.0),
+    }
+
+    callback = _make_env_cfg_callback(
+        control_hz=None,
+        lever_success_object_name=None,
+        lever_success_angle_deg=None,
+        robot_dr=False,
+        robot_position_xyz=(-0.4, -0.48682, 0.94296),
+        robot_yaw_rad=0.0,
+        robot_xy_jitter=0.04,
+        robot_z_jitter=0.0,
+        robot_yaw_jitter_rad=math.radians(8.0),
+        background_dr_names=[],
+        base_lever_dr_params=base_lever_dr_params,
+    )
+
+    assert callback is not None
+    env_cfg = callback(env_cfg)
+
+    event = env_cfg.events.randomize_base_lever_pose
+    assert event.func is randomize_base_lever_pose_and_reset_handle
+    assert event.params["object_name"] == "another_try_lever"
+    assert event.params["xy_jitter"] == 0.06
+    assert event.params["z_jitter"] == 0.04
+    assert event.params["yaw_jitter_rad"] == math.radians(35.0)
+
+
+def test_alex_empty_env_cfg_callback_installs_base_lever_handle_reset_event():
+    pytest.importorskip("isaaclab")
+
+    from isaaclab_arena.terms.events import reset_internal_rigid_body_to_object_rest
+    from isaaclab_arena.utils.pose import Pose
+
+    env_cfg = _DummyCfg()
+    env_cfg.events = _DummyCfg()
+    env_cfg.terminations = _DummyCfg()
+    env_cfg.sim = _DummyCfg()
+    base_lever_reset_params = {
+        "object_name": "another_try_lever",
+        "body_suffix": "/Handle_1",
+        "object_pose": Pose(position_xyz=(0.0, 0.0, 0.0)),
+        "object_scale": (0.0254, 0.0254, 0.0254),
+        "body_local_pos": (0.0, 0.0, 0.0),
+        "body_local_quat_xyzw": (0.0, 0.0, 0.0, 1.0),
+    }
+
+    callback = _make_env_cfg_callback(
+        control_hz=None,
+        lever_success_object_name=None,
+        lever_success_angle_deg=None,
+        robot_dr=False,
+        robot_position_xyz=(-0.4, -0.48682, 0.94296),
+        robot_yaw_rad=0.0,
+        robot_xy_jitter=0.04,
+        robot_z_jitter=0.0,
+        robot_yaw_jitter_rad=math.radians(8.0),
+        background_dr_names=[],
+        base_lever_reset_params=base_lever_reset_params,
+    )
+
+    assert callback is not None
+    env_cfg = callback(env_cfg)
+
+    event = env_cfg.events.reset_base_lever_handle
+    assert event.func is reset_internal_rigid_body_to_object_rest
+    assert event.params["object_name"] == "another_try_lever"
+    assert event.params["body_suffix"] == "/Handle_1"
 
 
 def test_background_visibility_supports_assets_without_env_ids():
