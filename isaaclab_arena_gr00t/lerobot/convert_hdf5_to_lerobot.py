@@ -310,7 +310,8 @@ def extract_teleop_command(
     """
     assert "action" in trajectory.keys()
     assert teleop_key in config.hdf5_keys
-    teleop_command = trajectory["action"][config.hdf5_keys[teleop_key]][:-1]
+    sample_slice = slice(None, -1) if config.drop_last_sample else slice(None)
+    teleop_command = trajectory["action"][config.hdf5_keys[teleop_key]][sample_slice]
     return [row for row in teleop_command]
 
 
@@ -427,6 +428,7 @@ def convert_trajectory_to_df(
 
     return_dict = {}
     data = {}
+    sample_slice = slice(None, -1) if config.drop_last_sample else slice(None)
 
     policy_modality_config = load_json(config.modality_template_path)
 
@@ -467,7 +469,7 @@ def convert_trajectory_to_df(
         # state
         if key == "state":
             # NOTE(xinjieyao, 2025-09-25): remove the last obs due to Lab reports observations
-            joints = joints[:-1]
+            joints = joints[sample_slice]
             if config.state_passthrough:
                 joints = np.asarray(joints, dtype=np.float32)
                 assert joints.ndim == 2
@@ -477,7 +479,7 @@ def convert_trajectory_to_df(
         # action target
         elif key == "action":
             # NOTE(xinjieyao, 2025-09-25): remove the last idle action due to Lab reports actions
-            joints = joints[:-1]
+            joints = joints[sample_slice]
             if config.action_passthrough:
                 joints = np.asarray(joints, dtype=np.float32)
                 assert joints.ndim == 2
@@ -563,7 +565,9 @@ def convert_trajectory_to_df(
                 side_eef_pos = trajectory[key][config.hdf5_keys[f"{side}_eef_pos"]]
                 side_eef_quat = trajectory[key][config.hdf5_keys[f"{side}_eef_quat"]]
                 side_eef_pose = EefPose.from_array(
-                    side_eef_pos[:-1], side_eef_quat[:-1], device="cpu"
+                    side_eef_pos[sample_slice],
+                    side_eef_quat[sample_slice],
+                    device="cpu",
                 )
                 eef_pose[side] = side_eef_pose.get_eef_pose()
         if "left" in eef_pose and "right" in eef_pose:
@@ -585,7 +589,8 @@ def convert_trajectory_to_df(
         # Raw Pink IK `actions` packs [left pos3+quat4, right pos3+quat4, ...]; columns
         # [start:end] are the bimanual wrist target poses (matches left/right_wrist_pose modality).
         action_eef = np.asarray(
-            trajectory[config.hdf5_keys["action"]][:-1, start:end], dtype=np.float64
+            trajectory[config.hdf5_keys["action"]][sample_slice, start:end],
+            dtype=np.float64,
         )
         assert action_eef.shape == (
             length,
@@ -734,7 +739,7 @@ def convert_hdf5_to_lerobot(config: Gr00tDatasetConfig):
 
             frames = np.array(trajectory["camera_obs"][sim_cam_name])
             # remove last frame due to how Lab reports observations
-            frames = frames[:-1]
+            frames = frames[:-1] if config.drop_last_sample else frames
             assert len(frames) == length
             queue.put((new_video_path, frames, config.fps, "image"))
 

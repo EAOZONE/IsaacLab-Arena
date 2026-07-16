@@ -21,6 +21,12 @@ from gymnasium.spaces.dict import Dict as GymSpacesDict
 
 from isaaclab_arena.embodiments.alex.alex import ABILITY_HAND_TELEOP_JOINT_ORDER
 from isaaclab_arena.policy.policy_base import PolicyBase
+from isaaclab_arena_gr00t.streaming.gr00t_eef_ikstream_bridge import (
+    IKStreamerBridge,
+    add_ikstreamer_cli_args,
+    create_ikstreamer_bridge_from_args,
+    stream_env_action_to_ikstreamer,
+)
 
 _STATE_DIM = 48
 _POLICY_ACTION_DIM = 46
@@ -44,6 +50,11 @@ class LeRobotRemotePolicyArgs:
     remote_url: str
     rollout_manifest: str
     policy_device: str = "cpu"
+    stream_ikstreamer: bool = False
+    ikstreamer_host: str = "127.0.0.1"
+    ikstreamer_port: int = 2102
+    debug_ikstreamer: bool = False
+    ikstreamer_yaw_offset: float = 0.0
 
 
 def _as_torch(value) -> torch.Tensor:
@@ -144,6 +155,9 @@ class LeRobotRemotePolicy(PolicyBase):
         self._chunk_index = 0
         self.task_description = ""
 
+        self._ikstreamer_bridge: IKStreamerBridge | None = create_ikstreamer_bridge_from_args(config)
+        self._ikstreamer_dim_mismatch_warned = [False]
+
     @property
     def is_remote(self) -> bool:
         return True
@@ -153,6 +167,7 @@ class LeRobotRemotePolicy(PolicyBase):
         group = parser.add_argument_group("Remote LeRobot policy")
         group.add_argument("--remote_url", required=True)
         group.add_argument("--rollout_manifest", required=True)
+        add_ikstreamer_cli_args(parser)
         return parser
 
     @staticmethod
@@ -162,6 +177,11 @@ class LeRobotRemotePolicy(PolicyBase):
                 remote_url=args.remote_url,
                 rollout_manifest=args.rollout_manifest,
                 policy_device=getattr(args, "policy_device", "cpu"),
+                stream_ikstreamer=getattr(args, "stream_ikstreamer", False),
+                ikstreamer_host=getattr(args, "ikstreamer_host", "127.0.0.1"),
+                ikstreamer_port=getattr(args, "ikstreamer_port", 2102),
+                debug_ikstreamer=getattr(args, "debug_ikstreamer", False),
+                ikstreamer_yaw_offset=getattr(args, "ikstreamer_yaw_offset", 0.0),
             )
         )
 
@@ -196,6 +216,14 @@ class LeRobotRemotePolicy(PolicyBase):
         self._chunk_index += 1
         if action.shape[1] != _ARENA_ACTION_DIM:
             raise ValueError(f"Arena action adapter produced {action.shape[1]} values")
+        if self._ikstreamer_bridge is not None:
+            stream_env_action_to_ikstreamer(
+                self._ikstreamer_bridge,
+                action,
+                env=env,
+                env_index=0,
+                dim_mismatch_warned=self._ikstreamer_dim_mismatch_warned,
+            )
         return action
 
     def reset(self, env_ids: torch.Tensor | None = None) -> None:
@@ -204,6 +232,11 @@ class LeRobotRemotePolicy(PolicyBase):
         request = urllib.request.Request(f"{self.remote_url}/reset", data=b"", method="POST")
         with urllib.request.urlopen(request, timeout=10):
             pass
+
+    def close(self) -> None:
+        if self._ikstreamer_bridge is not None:
+            self._ikstreamer_bridge.close()
+            self._ikstreamer_bridge = None
 
     def shutdown_remote(self, kill_server: bool = False) -> None:
         """LeLab owns the shared remote server/container lifecycle."""

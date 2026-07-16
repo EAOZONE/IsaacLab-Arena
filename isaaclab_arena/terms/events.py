@@ -184,6 +184,7 @@ def _sample_root_pose_xy_yaw(
     base_yaw_rad: float,
     xy_jitter: float,
     yaw_jitter_rad: float,
+    z_jitter: float = 0.0,
 ) -> torch.Tensor:
     """Return env-origin-adjusted root poses as ``xyz + xyzw`` tensors."""
     from isaaclab.utils.math import quat_from_euler_xyz
@@ -196,6 +197,10 @@ def _sample_root_pose_xy_yaw(
         base_pos[:, :2] += (
             torch.rand((num_envs, 2), device=env.device) * 2.0 - 1.0
         ) * xy_jitter
+    if z_jitter > 0.0:
+        base_pos[:, 2] += (
+            torch.rand((num_envs,), device=env.device) * 2.0 - 1.0
+        ) * z_jitter
     base_pos += env.scene.env_origins[env_ids]
 
     yaw = torch.full((num_envs,), base_yaw_rad, device=env.device, dtype=torch.float32)
@@ -217,6 +222,7 @@ def randomize_articulation_root_pose(
     base_yaw_rad: float,
     xy_jitter: float,
     yaw_jitter_rad: float,
+    z_jitter: float = 0.0,
 ) -> None:
     """Randomize an articulation root pose around a fixed xy/yaw center."""
     if env_ids is None:
@@ -229,6 +235,7 @@ def randomize_articulation_root_pose(
         base_position_xyz=base_position_xyz,
         base_yaw_rad=base_yaw_rad,
         xy_jitter=xy_jitter,
+        z_jitter=z_jitter,
         yaw_jitter_rad=yaw_jitter_rad,
     )
     asset.write_root_pose_to_sim(root_pose, env_ids=env_ids)
@@ -245,6 +252,7 @@ def randomize_base_lever_pose_and_reset_handle(
     base_position_xyz: tuple[float, float, float],
     base_yaw_rad: float,
     xy_jitter: float,
+    z_jitter: float,
     yaw_jitter_rad: float,
     object_scale: tuple[float, float, float],
     body_local_pos: tuple[float, float, float],
@@ -260,6 +268,7 @@ def randomize_base_lever_pose_and_reset_handle(
         base_position_xyz=base_position_xyz,
         base_yaw_rad=base_yaw_rad,
         xy_jitter=xy_jitter,
+        z_jitter=z_jitter,
         yaw_jitter_rad=yaw_jitter_rad,
     )
     asset = env.scene[object_name]

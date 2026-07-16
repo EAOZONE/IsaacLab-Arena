@@ -108,6 +108,16 @@ class Gr00tDatasetConfig:
             )
         },
     )
+    drop_last_sample: bool = field(
+        default=True,
+        metadata={
+            "description": (
+                "When true, drop the final HDF5 sample to align Mimic/Lab streams that include an extra terminal "
+                "observation or idle action. Set false for recorder outputs whose state, action, and video streams "
+                "already have matched real samples."
+            )
+        },
+    )
     state_passthrough: bool = field(
         default=False,
         metadata={

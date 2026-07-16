@@ -119,6 +119,8 @@ def build_lever_scene_assets(
     table: str,
     lever_dr_xy_jitter: float = _LEVER_DR_XY_JITTER,
     lever_dr_yaw_jitter_deg: float = _LEVER_DR_YAW_RANGE_DEG,
+    lever_pose_dr: bool | None = None,
+    lever_visual_dr: bool | None = None,
 ) -> tuple[list[Asset], Object]:
     """Build the lever (+ optional table) scene assets for a lever_sim board USD.
 
@@ -128,10 +130,12 @@ def build_lever_scene_assets(
             ``LEVER_USD_DEFAULT_POS`` for the tuned default).
         usd_yaw: Yaw in degrees about world Z for the lever board (see the rotation comment below).
         usd_scale: Uniform scale (pass ``LEVER_USD_DEFAULT_SCALE`` for the tuned default).
-        lever_dr: Enable reset-time xy/yaw pose jitter plus curated handle-color variation.
+        lever_dr: Backward-compatible switch for both pose jitter and handle-color variation.
         table: Workbench asset key placed under the board (``"seattle_lab"`` or ``"none"``).
         lever_dr_xy_jitter: Half-range for xy reset-time jitter, in metres.
         lever_dr_yaw_jitter_deg: Half-range for reset-time yaw jitter, in degrees.
+        lever_pose_dr: Enable pose jitter. Defaults to ``lever_dr``.
+        lever_visual_dr: Enable curated handle-color variation. Defaults to ``lever_dr``.
 
     Returns:
         A ``(extra_scene_assets, lever_object)`` tuple. ``extra_scene_assets`` contains the
@@ -142,6 +146,11 @@ def build_lever_scene_assets(
     import torch
     import isaaclab.sim as sim_utils
     from isaaclab.utils.math import quat_from_euler_xyz
+
+    if lever_pose_dr is None:
+        lever_pose_dr = lever_dr
+    if lever_visual_dr is None:
+        lever_visual_dr = lever_dr
 
     # The asset's own geometry is already Z-up (flat board, handle pointing +Z) -- only usd_yaw
     # (about world Z) is needed; no roll/pitch tilt.
@@ -154,7 +163,7 @@ def build_lever_scene_assets(
         )[0].tolist()
     )
     usd_stem = Path(usd_path).stem.lower()
-    use_pose_range_reset = lever_dr and usd_stem not in LEVER_BASE_OBJECT_STEMS
+    use_pose_range_reset = lever_pose_dr and usd_stem not in LEVER_BASE_OBJECT_STEMS
     if use_pose_range_reset:
         half_yaw_jitter_rad = math.radians(lever_dr_yaw_jitter_deg)
         usd_initial_pose = PoseRange(
@@ -212,7 +221,7 @@ def build_lever_scene_assets(
             "RevoluteJoint": math.radians(90.0)
         }
         lever_object.object_cfg.init_state.joint_vel = {"RevoluteJoint": 0.0}
-    elif usd_stem in LEVER_BASE_OBJECT_STEMS and lever_dr:
+    elif usd_stem in LEVER_BASE_OBJECT_STEMS and lever_pose_dr:
         # ``another_lever`` / ``lever_again`` are base USDs with a nested PhysX
         # rigid handle. Moving the root Xform or nested RigidPrim from a reset
         # event after GPU PhysX/Fabric starts can trip CUDA illegal-address
@@ -222,7 +231,7 @@ def build_lever_scene_assets(
         pass
     scene_assets: list[Asset] = [lever_object]
 
-    if lever_dr:
+    if lever_visual_dr:
         from isaaclab_arena.variations.visual_color_variation import (
             VisualColorVariation,
             VisualColorVariationCfg,

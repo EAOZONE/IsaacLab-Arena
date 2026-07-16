@@ -33,11 +33,16 @@ def test_ability_hand_action_dimensions():
 
 
 def test_pink_cfg_hand_joint_order_matches_teleop():
-    from isaaclab_arena.embodiments.alex.alex import ABILITY_HAND_TELEOP_JOINT_ORDER, AlexAbilityHandActionsCfg
+    from isaaclab_arena.embodiments.alex.alex import (
+        ABILITY_HAND_TELEOP_JOINT_ORDER,
+        AlexAbilityHandActionsCfg,
+    )
 
     cfg = AlexAbilityHandActionsCfg()
     assert cfg.upper_body_ik.hand_joint_names == ABILITY_HAND_TELEOP_JOINT_ORDER
-    assert cfg.upper_body_ik.controller.num_hand_joints == len(ABILITY_HAND_TELEOP_JOINT_ORDER)
+    assert cfg.upper_body_ik.controller.num_hand_joints == len(
+        ABILITY_HAND_TELEOP_JOINT_ORDER
+    )
 
 
 def test_teleop_output_order_matches_pink_slices():
@@ -51,12 +56,18 @@ def test_teleop_output_order_matches_pink_slices():
     )
 
     action_order = build_alex_ability_hand_teleop_action_order()
-    assert len(action_order) == ALEX_ABILITY_HAND_WRIST_ACTION_DIM + ALEX_ABILITY_HAND_HAND_ACTION_DIM
+    assert (
+        len(action_order)
+        == ALEX_ABILITY_HAND_WRIST_ACTION_DIM + ALEX_ABILITY_HAND_HAND_ACTION_DIM
+    )
 
     # PinkInverseKinematicsAction: frame tasks first, then actions[:, -num_hand_joints:].
     assert action_order[:7] == ALEX_ABILITY_HAND_LEFT_EE_ACTION_KEYS
     assert action_order[7:14] == ALEX_ABILITY_HAND_RIGHT_EE_ACTION_KEYS
-    assert action_order[-ALEX_ABILITY_HAND_HAND_ACTION_DIM:] == ABILITY_HAND_TELEOP_JOINT_ORDER
+    assert (
+        action_order[-ALEX_ABILITY_HAND_HAND_ACTION_DIM:]
+        == ABILITY_HAND_TELEOP_JOINT_ORDER
+    )
 
     # LocalFrameTask order in AlexAbilityHandActionsCfg: left wrist, then right wrist.
     assert action_order[0] == "l_pos_x"
@@ -84,8 +95,12 @@ def test_tensor_reorderer_maps_all_hand_joints():
     mapping = _simulate_tensor_reorderer_mapping(input_config, output_order)
 
     mapped_targets = {target_idx for _, _, target_idx in mapping}
-    hand_start = len(ALEX_ABILITY_HAND_LEFT_EE_ACTION_KEYS) + len(ALEX_ABILITY_HAND_RIGHT_EE_ACTION_KEYS)
-    hand_targets = set(range(hand_start, hand_start + len(ABILITY_HAND_TELEOP_JOINT_ORDER)))
+    hand_start = len(ALEX_ABILITY_HAND_LEFT_EE_ACTION_KEYS) + len(
+        ALEX_ABILITY_HAND_RIGHT_EE_ACTION_KEYS
+    )
+    hand_targets = set(
+        range(hand_start, hand_start + len(ABILITY_HAND_TELEOP_JOINT_ORDER))
+    )
 
     assert hand_targets.issubset(mapped_targets), (
         "TensorReorderer must map every hand joint name into the teleop action tensor. "
@@ -95,7 +110,9 @@ def test_tensor_reorderer_maps_all_hand_joints():
     for joint_name in ABILITY_HAND_TELEOP_JOINT_ORDER:
         target_idx = hand_start + ABILITY_HAND_TELEOP_JOINT_ORDER.index(joint_name)
         matches = [m for m in mapping if m[2] == target_idx]
-        assert len(matches) == 1, f"Expected exactly one mapping for {joint_name}, got {matches}"
+        assert (
+            len(matches) == 1
+        ), f"Expected exactly one mapping for {joint_name}, got {matches}"
         input_name, source_idx, _ = matches[0]
         if joint_name.startswith("left_"):
             assert input_name == "left_hand_joints"
@@ -117,7 +134,9 @@ def test_mimic_gripper_pack_unpack_roundtrip():
     )
 
     left = torch.arange(ALEX_ABILITY_HAND_PER_HAND_GRIPPER_DIM, dtype=torch.float32)
-    right = torch.arange(10, 10 + ALEX_ABILITY_HAND_PER_HAND_GRIPPER_DIM, dtype=torch.float32)
+    right = torch.arange(
+        10, 10 + ALEX_ABILITY_HAND_PER_HAND_GRIPPER_DIM, dtype=torch.float32
+    )
     packed = _pack_ability_hand_teleop_block(left, right)
     assert packed.shape == (20,)
 
@@ -126,6 +145,139 @@ def test_mimic_gripper_pack_unpack_roundtrip():
     unpacked = _unpack_ability_hand_gripper_actions(actions)
     assert torch.allclose(unpacked["left"], left)
     assert torch.allclose(unpacked["right"], right)
+
+
+def test_teleop_hand_override_preserves_wrist_block():
+    import torch
+
+    from isaaclab_arena.embodiments.alex.alex import (
+        ABILITY_HAND_TELEOP_JOINT_ORDER,
+        ALEX_ABILITY_HAND_HAND_ACTION_DIM,
+        ALEX_ABILITY_HAND_TOTAL_ACTION_DIM,
+        ALEX_ABILITY_HAND_WRIST_ACTION_DIM,
+        build_ability_hand_thumbs_up_action,
+        override_ability_hand_teleop_action,
+    )
+
+    action = torch.linspace(-1.0, 1.0, ALEX_ABILITY_HAND_TOTAL_ACTION_DIM)
+    overridden = override_ability_hand_teleop_action(action, "thumbs_up", 0.75)
+
+    assert torch.allclose(
+        overridden[:ALEX_ABILITY_HAND_WRIST_ACTION_DIM],
+        action[:ALEX_ABILITY_HAND_WRIST_ACTION_DIM],
+    )
+    assert torch.allclose(
+        overridden[ALEX_ABILITY_HAND_WRIST_ACTION_DIM:],
+        build_ability_hand_thumbs_up_action(0.75, 0.75),
+    )
+    assert overridden[ALEX_ABILITY_HAND_WRIST_ACTION_DIM:].shape == (
+        ALEX_ABILITY_HAND_HAND_ACTION_DIM,
+    )
+    hand_action = overridden[ALEX_ABILITY_HAND_WRIST_ACTION_DIM:]
+    left_thumb_rotator = ABILITY_HAND_TELEOP_JOINT_ORDER.index(
+        "left_ability_hand_thumb_q1"
+    )
+    left_thumb_flexor = ABILITY_HAND_TELEOP_JOINT_ORDER.index(
+        "left_ability_hand_thumb_q2"
+    )
+    assert hand_action[left_thumb_rotator] > -1.74
+    assert hand_action[left_thumb_flexor] == 0.0
+
+
+def test_teleop_hand_override_passthrough_returns_input():
+    import torch
+
+    from isaaclab_arena.embodiments.alex.alex import (
+        ALEX_ABILITY_HAND_TOTAL_ACTION_DIM,
+        override_ability_hand_teleop_action,
+    )
+
+    action = torch.zeros(ALEX_ABILITY_HAND_TOTAL_ACTION_DIM)
+
+    assert override_ability_hand_teleop_action(action, "passthrough", 0.75) is action
+
+
+def test_openxr_flexion_maps_thumb_q1_reverse_range():
+    import numpy as np
+
+    from isaaclab_arena.teleop.ability_hand_finger_flexion_retargeter import (
+        ABILITY_THUMB_Q1_CLOSED,
+        ABILITY_THUMB_Q1_OPEN,
+        ability_hand_q1_from_openxr_flexion,
+    )
+    from isaaclab_arena.teleop.captury import captury_skeleton as cs
+
+    def _positions(curl: float):
+        positions = np.zeros((cs.NUM_OPENXR_HAND_JOINTS, 3), dtype=np.float32)
+        valid = np.zeros(cs.NUM_OPENXR_HAND_JOINTS, dtype=np.uint8)
+        positions[cs.OPENXR_WRIST] = (0.0, 0.0, 0.0)
+        positions[cs.OPENXR_THUMB_METACARPAL] = (-0.04, 0.03, 0.0)
+        out_dir = positions[cs.OPENXR_THUMB_METACARPAL] / np.linalg.norm(
+            positions[cs.OPENXR_THUMB_METACARPAL]
+        )
+        fold_dir = np.array([0.0, -0.6, -0.8])
+        tip_dir = (1.0 - curl) * out_dir + curl * fold_dir
+        tip_dir = tip_dir / np.linalg.norm(tip_dir)
+        positions[cs.OPENXR_THUMB_TIP] = (
+            positions[cs.OPENXR_THUMB_METACARPAL] + 0.06 * tip_dir
+        )
+        valid[[cs.OPENXR_WRIST, cs.OPENXR_THUMB_METACARPAL, cs.OPENXR_THUMB_TIP]] = 1
+        return positions, valid
+
+    open_positions, valid = _positions(curl=0.0)
+    closed_positions, _ = _positions(curl=1.0)
+
+    q_open = ability_hand_q1_from_openxr_flexion(open_positions, valid)
+    q_closed = ability_hand_q1_from_openxr_flexion(closed_positions, valid)
+
+    assert q_open["thumb"] < -1.0
+    assert q_closed["thumb"] > -0.3
+    assert q_open["thumb"] >= ABILITY_THUMB_Q1_OPEN
+    assert q_closed["thumb"] <= ABILITY_THUMB_Q1_CLOSED
+    assert q_closed["thumb"] > q_open["thumb"]
+
+
+def test_openxr_flexion_maps_fingers_open_to_closed():
+    import numpy as np
+
+    from isaaclab_arena.teleop.ability_hand_finger_flexion_retargeter import (
+        ability_hand_q1_from_openxr_flexion,
+    )
+    from isaaclab_arena.teleop.captury import captury_skeleton as cs
+
+    def _make_openxr_hand_positions(curl: float) -> tuple[np.ndarray, np.ndarray]:
+        positions = np.zeros((cs.NUM_OPENXR_HAND_JOINTS, 3), dtype=np.float32)
+        valid = np.zeros(cs.NUM_OPENXR_HAND_JOINTS, dtype=np.uint8)
+        positions[cs.OPENXR_WRIST] = (0.0, 0.0, 0.0)
+        valid[cs.OPENXR_WRIST] = 1
+        chains = {
+            (cs.OPENXR_INDEX_PROXIMAL, cs.OPENXR_INDEX_TIP): 0.03,
+            (cs.OPENXR_MIDDLE_PROXIMAL, cs.OPENXR_MIDDLE_TIP): 0.01,
+            (cs.OPENXR_RING_PROXIMAL, cs.OPENXR_RING_TIP): -0.01,
+            (cs.OPENXR_LITTLE_PROXIMAL, cs.OPENXR_LITTLE_TIP): -0.03,
+        }
+        for (proximal_key, tip_key), x_value in chains.items():
+            proximal = np.array([x_value, 0.05, 0.0])
+            positions[proximal_key] = proximal
+            out_dir = proximal / np.linalg.norm(proximal)
+            fold_dir = np.array([0.0, -0.6, -0.8])
+            tip_dir = (1.0 - curl) * out_dir + curl * fold_dir
+            tip_dir = tip_dir / np.linalg.norm(tip_dir)
+            positions[tip_key] = proximal + 0.09 * tip_dir
+            valid[proximal_key] = 1
+            valid[tip_key] = 1
+        return positions, valid
+
+    open_positions, valid = _make_openxr_hand_positions(curl=0.0)
+    closed_positions, _ = _make_openxr_hand_positions(curl=1.0)
+
+    q_open = ability_hand_q1_from_openxr_flexion(open_positions, valid)
+    q_closed = ability_hand_q1_from_openxr_flexion(closed_positions, valid)
+
+    for finger in ("index", "middle", "ring", "pinky"):
+        assert q_open[finger] < 0.3
+        assert q_closed[finger] > 1.0
+        assert q_closed[finger] > q_open[finger]
 
 
 def test_ability_hand_mimic_env_action_dim():
@@ -152,7 +304,10 @@ def test_ability_hand_mimic_env_action_dim():
 def test_ability_hand_mimic_noise_preserves_unit_quaternions():
     import torch
 
-    from isaaclab_arena.embodiments.alex.alex import ALEX_ABILITY_HAND_PER_HAND_GRIPPER_DIM, AlexAbilityHandMimicEnv
+    from isaaclab_arena.embodiments.alex.alex import (
+        ALEX_ABILITY_HAND_PER_HAND_GRIPPER_DIM,
+        AlexAbilityHandMimicEnv,
+    )
 
     env = object.__new__(AlexAbilityHandMimicEnv)
     env._is_closed = True
@@ -166,7 +321,9 @@ def test_ability_hand_mimic_noise_preserves_unit_quaternions():
     )
 
     assert torch.allclose(torch.linalg.norm(action[3:7]), torch.tensor(1.0), atol=1e-6)
-    assert torch.allclose(torch.linalg.norm(action[10:14]), torch.tensor(1.0), atol=1e-6)
+    assert torch.allclose(
+        torch.linalg.norm(action[10:14]), torch.tensor(1.0), atol=1e-6
+    )
 
 
 def test_joint_position_embodiment_action_layout():
@@ -198,8 +355,42 @@ def test_joint_position_embodiment_action_layout():
         assert embodiment.scene_config.robot.spawn.fix_base is True
 
 
-def test_hand_joint_order_is_permutation_of_urdf_joint_list():
-    from isaaclab_arena.embodiments.alex.alex import ABILITY_HAND_JOINT_NAMES_LIST, ABILITY_HAND_TELEOP_JOINT_ORDER
+def test_teleop_actuators_use_softer_wrist_group():
+    from isaaclab_arena.embodiments.alex.alex import (
+        ALEX_TELEOP_ARM_DAMPING,
+        ALEX_TELEOP_ARM_STIFFNESS,
+        ALEX_TELEOP_WRIST_DAMPING,
+        ALEX_TELEOP_WRIST_STIFFNESS,
+        ALEX_V2,
+        _configure_ability_hand_robot,
+    )
 
-    assert sorted(ABILITY_HAND_TELEOP_JOINT_ORDER) == sorted(ABILITY_HAND_JOINT_NAMES_LIST)
-    assert len(ABILITY_HAND_TELEOP_JOINT_ORDER) == len(set(ABILITY_HAND_TELEOP_JOINT_ORDER))
+    robot_cfg, _, _ = _configure_ability_hand_robot(ALEX_V2, fix_base=True)
+
+    assert robot_cfg.actuators["arms"].joint_names_expr == [
+        ".*SHOULDER.*",
+        ".*ELBOW.*",
+    ]
+    assert robot_cfg.actuators["arms"].stiffness == ALEX_TELEOP_ARM_STIFFNESS
+    assert robot_cfg.actuators["arms"].damping == ALEX_TELEOP_ARM_DAMPING
+    assert robot_cfg.actuators["wrists"].joint_names_expr == [
+        ".*WRIST.*",
+        ".*GRIPPER.*",
+    ]
+    assert robot_cfg.actuators["wrists"].stiffness == ALEX_TELEOP_WRIST_STIFFNESS
+    assert robot_cfg.actuators["wrists"].damping == ALEX_TELEOP_WRIST_DAMPING
+    assert ALEX_TELEOP_WRIST_STIFFNESS < ALEX_TELEOP_ARM_STIFFNESS
+
+
+def test_hand_joint_order_is_permutation_of_urdf_joint_list():
+    from isaaclab_arena.embodiments.alex.alex import (
+        ABILITY_HAND_JOINT_NAMES_LIST,
+        ABILITY_HAND_TELEOP_JOINT_ORDER,
+    )
+
+    assert sorted(ABILITY_HAND_TELEOP_JOINT_ORDER) == sorted(
+        ABILITY_HAND_JOINT_NAMES_LIST
+    )
+    assert len(ABILITY_HAND_TELEOP_JOINT_ORDER) == len(
+        set(ABILITY_HAND_TELEOP_JOINT_ORDER)
+    )
